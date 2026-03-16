@@ -6,6 +6,16 @@ import mss
 from PIL import Image
 
 
+def list_all_windows():
+    """List all visible windows with titles.
+
+    Returns list of (window_id, title) tuples.
+    """
+    if sys.platform == "win32":
+        return _find_windows_win32("")
+    return _list_windows_linux()
+
+
 def find_windows_by_title(title_substring):
     """Find visible windows whose title contains the substring (case-insensitive).
 
@@ -159,6 +169,50 @@ def _find_windows_linux(title_substring):
                 except subprocess.CalledProcessError:
                     name = f"Window {wid}"
                 results.append((wid, name))
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        pass
+
+    return results
+
+
+def _list_windows_linux():
+    """List all visible windows on Linux."""
+    results = []
+
+    # Try wmctrl first
+    try:
+        output = subprocess.check_output(
+            ["wmctrl", "-l"], text=True, stderr=subprocess.DEVNULL,
+        )
+        for line in output.strip().splitlines():
+            parts = line.split(None, 3)
+            if len(parts) >= 4:
+                wid = parts[0]
+                title = parts[3]
+                if title.strip():
+                    results.append((wid, title))
+        return results
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        pass
+
+    # Fallback: xdotool
+    try:
+        output = subprocess.check_output(
+            ["xdotool", "search", "--onlyvisible", "--name", ""],
+            text=True, stderr=subprocess.DEVNULL,
+        )
+        for wid_str in output.strip().splitlines():
+            wid = wid_str.strip()
+            if wid:
+                try:
+                    name = subprocess.check_output(
+                        ["xdotool", "getwindowname", wid],
+                        text=True, stderr=subprocess.DEVNULL,
+                    ).strip()
+                except subprocess.CalledProcessError:
+                    name = f"Window {wid}"
+                if name:
+                    results.append((wid, name))
     except (FileNotFoundError, subprocess.CalledProcessError):
         pass
 

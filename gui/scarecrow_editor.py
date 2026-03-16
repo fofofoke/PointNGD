@@ -244,6 +244,7 @@ class ScarecrowEditor(tk.Toplevel):
             self,
             window_id=self._window_id,
             callback=self._on_screen_capture,
+            return_coords=False,
         )
         capturer.wait_window()
         self.deiconify()
@@ -283,6 +284,7 @@ class ScarecrowEditor(tk.Toplevel):
             self,
             window_id=self._window_id,
             callback=self._on_screen_capture,
+            return_coords=False,
         )
         capturer.wait_window()
         self.deiconify()

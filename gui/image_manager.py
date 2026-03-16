@@ -170,9 +170,19 @@ class ImageManager(tk.Toplevel):
             self.preview_info.set(f"Loaded: {dest}")
 
     def _capture_from_screen(self):
-        """Capture a region from screen (or target window) as template."""
+        """Capture a region from target window as template + auto-set ROI."""
         key = self._get_selected_key()
         if not key:
+            return
+
+        # Re-resolve target window
+        self._resolve_target_window()
+        if not self._window_id:
+            messagebox.showerror(
+                "Error",
+                "Target window not found.\n"
+                "Please set target_window_title in settings and ensure the window is open.",
+            )
             return
 
         self.withdraw()
@@ -181,7 +191,8 @@ class ImageManager(tk.Toplevel):
         capturer = ScreenRegionCapture(
             self,
             window_id=self._window_id,
-            callback=lambda img: self._on_capture(key, img),
+            callback=lambda img, x, y, w, h: self._on_capture(key, img, x, y, w, h),
+            return_coords=True,
         )
         capturer.wait_window()
         self.deiconify()
@@ -192,19 +203,30 @@ class ImageManager(tk.Toplevel):
         if not key:
             return
 
-        roi = self.config.get("roi", {}).get(key)
+        # Check for matching ROI key
+        roi_key = self.IMAGE_TO_ROI_MAP.get(key, key)
+        roi = self.config.get("roi", {}).get(roi_key)
         if not roi or roi.get("w", 0) <= 10:
-            messagebox.showwarning("Warning", f"ROI for '{key}' is not configured.\nSet the ROI first.")
+            messagebox.showwarning("Warning", f"ROI for '{roi_key}' is not configured.\nSet the ROI first.")
             return
 
-        # Convert window-relative ROI to absolute for capture
-        abs_x = roi["x"]
-        abs_y = roi["y"]
-        if self._window_id:
-            rect = get_window_rect(self._window_id)
-            if rect:
-                abs_x += rect["x"]
-                abs_y += rect["y"]
+        # Require target window
+        self._resolve_target_window()
+        if not self._window_id:
+            messagebox.showerror(
+                "Error",
+                "Target window not found.\n"
+                "Please set target_window_title in settings and ensure the window is open.",
+            )
+            return
+
+        rect = get_window_rect(self._window_id)
+        if not rect:
+            messagebox.showerror("Error", "Failed to get target window geometry.")
+            return
+
+        abs_x = roi["x"] + rect["x"]
+        abs_y = roi["y"] + rect["y"]
 
         with mss.mss() as sct:
             monitor = {
@@ -221,15 +243,39 @@ class ImageManager(tk.Toplevel):
         self._show_preview(dest)
         self.preview_info.set(f"Captured from ROI: {dest}")
 
-    def _on_capture(self, key, img):
+    # Mapping from image key to ROI key (reverse of ROIEditor's map)
+    IMAGE_TO_ROI_MAP = {
+        "empty_slot": "empty_slot",
+        "knight_icon": "knight_icon",
+        "knight_verify": "knight_verify",
+        "confirm_button": "confirm_button",
+        "item_icon": "item_slot",
+        "popup_text": "popup_text",
+        "scarecrow": "scarecrow_search",
+        "level_up_effect": "level_display",
+        "exit_button": "exit_button",
+        "delete_popup": "delete_popup",
+    }
+
+    def _on_capture(self, key, img, x=0, y=0, w=0, h=0):
         if img is None:
             return
         dest = os.path.join(self.images_dir, f"{key}.png")
         img.save(dest)
         self.config["images"][key] = dest
+
+        # Auto-set ROI from the captured region coordinates
+        roi_key = self.IMAGE_TO_ROI_MAP.get(key)
+        roi_msg = ""
+        if roi_key and w > 5 and h > 5:
+            self.config.setdefault("roi", {})[roi_key] = {
+                "x": x, "y": y, "w": w, "h": h,
+            }
+            roi_msg = f" + ROI '{roi_key}' set ({x},{y} {w}x{h})"
+
         self._refresh_list()
         self._show_preview(dest)
-        self.preview_info.set(f"Captured: {dest}")
+        self.preview_info.set(f"Captured: {dest}{roi_msg}")
 
     def _clear_selected(self):
         key = self._get_selected_key()
@@ -247,15 +293,18 @@ class ImageManager(tk.Toplevel):
 
 
 class ScreenRegionCapture(tk.Toplevel):
-    """Capture a screen region by dragging.
+    """Capture a screen region by dragging on the target window.
 
-    If window_id is set, captures only the target window and returns
-    a cropped image from that window.  Otherwise captures the full screen.
+    Requires a valid window_id.  The callback receives either:
+      callback(image, x, y, w, h)   -- when return_coords=True (default)
+      callback(image)               -- when return_coords=False (legacy)
+    where x, y, w, h are window-relative pixel coordinates of the selected region.
     """
 
-    def __init__(self, parent, window_id=None, callback=None):
+    def __init__(self, parent, window_id=None, callback=None, return_coords=True):
         super().__init__(parent)
         self.callback = callback
+        self.return_coords = return_coords
         self.drag_start = None
         self.drag_rect = None
         self._window_id = window_id
@@ -268,36 +317,13 @@ class ScreenRegionCapture(tk.Toplevel):
         if self._window_rect:
             self._build_window_mode()
         else:
-            self._build_fullscreen_mode()
-
-    def _build_fullscreen_mode(self):
-        """Legacy fullscreen capture."""
-        with mss.mss() as sct:
-            monitor = sct.monitors[1]
-            screenshot = sct.grab(monitor)
-            self.full_image = Image.frombytes("RGB", screenshot.size, screenshot.rgb)
-            self.screen_w = monitor["width"]
-            self.screen_h = monitor["height"]
-
-        self.attributes("-fullscreen", True)
-        self.config(cursor="crosshair")
-
-        self.canvas = tk.Canvas(self, highlightthickness=0)
-        self.canvas.pack(fill=tk.BOTH, expand=True)
-
-        self.photo = ImageTk.PhotoImage(self.full_image)
-        self.canvas.create_image(0, 0, anchor=tk.NW, image=self.photo)
-
-        self.canvas.create_text(
-            self.screen_w // 2, 30,
-            text="Drag to select region. ESC to cancel.",
-            fill="yellow", font=("", 16, "bold"),
-        )
-
-        self.canvas.bind("<ButtonPress-1>", self._on_start)
-        self.canvas.bind("<B1-Motion>", self._on_drag)
-        self.canvas.bind("<ButtonRelease-1>", self._on_end_fullscreen)
-        self.bind("<Escape>", lambda e: self._cancel())
+            # No target window -- cannot proceed
+            messagebox.showerror(
+                "Error",
+                "Target window not found.\n"
+                "Please set target_window_title in settings and ensure the window is open.",
+            )
+            self.after(10, self._cancel)
 
     def _build_window_mode(self):
         """Capture from target window only."""
@@ -354,20 +380,6 @@ class ScreenRegionCapture(tk.Toplevel):
             outline="lime", width=2,
         )
 
-    def _on_end_fullscreen(self, event):
-        if self.drag_start is None:
-            return
-        x1 = min(self.drag_start[0], event.x)
-        y1 = min(self.drag_start[1], event.y)
-        x2 = max(self.drag_start[0], event.x)
-        y2 = max(self.drag_start[1], event.y)
-
-        if x2 - x1 > 5 and y2 - y1 > 5:
-            cropped = self.full_image.crop((x1, y1, x2, y2))
-            if self.callback:
-                self.callback(cropped)
-        self.destroy()
-
     def _on_end_window(self, event):
         """End drag in window mode - convert scaled coords to pixel coords."""
         if self.drag_start is None:
@@ -377,7 +389,7 @@ class ScreenRegionCapture(tk.Toplevel):
         x2 = max(self.drag_start[0], event.x)
         y2 = max(self.drag_start[1], event.y)
 
-        # Convert canvas coords to actual pixel coords
+        # Convert canvas coords to actual pixel coords (window-relative)
         px1 = int(x1 / self.scale_factor)
         py1 = int(y1 / self.scale_factor)
         px2 = int(x2 / self.scale_factor)
@@ -386,10 +398,16 @@ class ScreenRegionCapture(tk.Toplevel):
         if px2 - px1 > 5 and py2 - py1 > 5:
             cropped = self.full_image.crop((px1, py1, px2, py2))
             if self.callback:
-                self.callback(cropped)
+                if self.return_coords:
+                    self.callback(cropped, px1, py1, px2 - px1, py2 - py1)
+                else:
+                    self.callback(cropped)
         self.destroy()
 
     def _cancel(self):
         if self.callback:
-            self.callback(None)
+            if self.return_coords:
+                self.callback(None, 0, 0, 0, 0)
+            else:
+                self.callback(None)
         self.destroy()

@@ -1,8 +1,30 @@
 """Input handler abstraction: Software (pyautogui) and Arduino Leonardo (serial HID)."""
 import time
 import logging
+import subprocess
+import platform
 
 logger = logging.getLogger(__name__)
+
+
+def _copy_to_clipboard(text):
+    """Copy text to system clipboard (cross-platform)."""
+    system = platform.system()
+    if system == "Windows":
+        # Use PowerShell to avoid encoding issues with clip.exe
+        process = subprocess.Popen(
+            ["powershell", "-command", f"Set-Clipboard -Value '{text}'"],
+            stdin=subprocess.PIPE,
+        )
+        process.communicate()
+    elif system == "Darwin":
+        process = subprocess.Popen(["pbcopy"], stdin=subprocess.PIPE)
+        process.communicate(text.encode("utf-8"))
+    else:
+        process = subprocess.Popen(
+            ["xclip", "-selection", "clipboard"], stdin=subprocess.PIPE,
+        )
+        process.communicate(text.encode("utf-8"))
 
 
 class InputHandler:
@@ -48,7 +70,14 @@ class SoftwareInput(InputHandler):
         logger.debug(f"Software double-click at ({x}, {y})")
 
     def type_text(self, text):
-        self.pyautogui.typewrite(text, interval=0.05)
+        """Type text. Uses clipboard paste for non-ASCII (Korean etc)."""
+        if all(ord(c) < 128 for c in text):
+            self.pyautogui.typewrite(text, interval=0.05)
+        else:
+            _copy_to_clipboard(text)
+            time.sleep(0.1)
+            self.pyautogui.hotkey("ctrl", "v")
+            time.sleep(0.1)
         logger.debug(f"Software type: {text}")
 
     def press_key(self, key):
@@ -100,7 +129,14 @@ class ArduinoInput(InputHandler):
         self._send(f"DBLCLICK {x} {y}")
 
     def type_text(self, text):
-        self._send(f"TYPE {text}")
+        """Type text. Uses clipboard paste for non-ASCII (Korean etc)."""
+        if all(ord(c) < 128 for c in text):
+            self._send(f"TYPE {text}")
+        else:
+            _copy_to_clipboard(text)
+            time.sleep(0.1)
+            self._send("HOTKEY ctrl+v")
+        logger.debug(f"Arduino type: {text}")
 
     def press_key(self, key):
         self._send(f"KEY {key}")

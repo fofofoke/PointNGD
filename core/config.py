@@ -80,6 +80,23 @@ DEFAULT_CONFIG = {
         "h_min": 10, "s_min": 50, "v_min": 50,
         "h_max": 30, "s_max": 255, "v_max": 255,
     },
+    "hp_bar_detection": {
+        "enabled": True,
+        "method": "color",  # "color" or "ocr"
+    },
+    "hotkeys": {
+        "enabled": True,
+    },
+    "log_file": {
+        "enabled": True,
+        "path": "bot.log",
+    },
+    "step_retry": {
+        "max_retries": 3,
+        "retry_delay": 2,
+    },
+    "ocr_retry_count": 3,
+    "error_screenshot_dir": "error_screenshots",
 }
 
 CONFIG_FILE = "config.json"
@@ -101,6 +118,40 @@ def save_config(config, path=None):
     filepath = path or CONFIG_FILE
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2, ensure_ascii=False)
+
+
+def list_profiles(profiles_dir="profiles"):
+    """List available profile names."""
+    if not os.path.isdir(profiles_dir):
+        return []
+    profiles = []
+    for f in sorted(os.listdir(profiles_dir)):
+        if f.endswith(".json"):
+            profiles.append(f[:-5])
+    return profiles
+
+
+def save_profile(config, name, profiles_dir="profiles"):
+    """Save config as a named profile."""
+    os.makedirs(profiles_dir, exist_ok=True)
+    path = os.path.join(profiles_dir, f"{name}.json")
+    save_config(config, path)
+    return path
+
+
+def load_profile(name, profiles_dir="profiles"):
+    """Load a named profile."""
+    path = os.path.join(profiles_dir, f"{name}.json")
+    return load_config(path)
+
+
+def delete_profile(name, profiles_dir="profiles"):
+    """Delete a named profile."""
+    path = os.path.join(profiles_dir, f"{name}.json")
+    if os.path.exists(path):
+        os.remove(path)
+        return True
+    return False
 
 
 def _deep_merge(base, override):

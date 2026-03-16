@@ -332,6 +332,61 @@ class ImageRecognition:
         rgb = cv2.cvtColor(masked, cv2.COLOR_BGR2RGB)
         return Image.fromarray(rgb), cv2.countNonZero(mask)
 
+    def check_hp_bar(self, region, red_threshold=None):
+        """Check HP bar by analyzing red pixel ratio in the region.
+
+        HP bars in Lineage are typically red. When HP is low/zero,
+        the red pixel ratio drops significantly.
+
+        Args:
+            region: ROI dict {x, y, w, h} for the HP bar area.
+            red_threshold: Dict with HSV range for "red" color detection.
+                          Defaults to typical game HP bar red.
+
+        Returns:
+            dict with:
+                - hp_ratio: float 0.0~1.0 (ratio of red pixels to total)
+                - is_dead: bool (True if hp_ratio < 0.05)
+                - pixel_count: int (number of red pixels found)
+        """
+        if not region or region.get("w", 0) <= 5:
+            return {"hp_ratio": 1.0, "is_dead": False, "pixel_count": 0}
+
+        screen = self.capture_screen(region)
+        hsv = cv2.cvtColor(screen, cv2.COLOR_BGR2HSV)
+
+        if red_threshold is None:
+            # Red wraps around in HSV (0-10 and 170-180)
+            lower_red1 = np.array([0, 80, 80])
+            upper_red1 = np.array([10, 255, 255])
+            lower_red2 = np.array([170, 80, 80])
+            upper_red2 = np.array([180, 255, 255])
+            mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
+            mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
+            mask = cv2.bitwise_or(mask1, mask2)
+        else:
+            lower = np.array([
+                red_threshold.get("h_min", 0),
+                red_threshold.get("s_min", 80),
+                red_threshold.get("v_min", 80),
+            ])
+            upper = np.array([
+                red_threshold.get("h_max", 10),
+                red_threshold.get("s_max", 255),
+                red_threshold.get("v_max", 255),
+            ])
+            mask = cv2.inRange(hsv, lower, upper)
+
+        pixel_count = cv2.countNonZero(mask)
+        total = region["w"] * region["h"]
+        hp_ratio = pixel_count / total if total > 0 else 0
+
+        return {
+            "hp_ratio": hp_ratio,
+            "is_dead": hp_ratio < 0.05,
+            "pixel_count": pixel_count,
+        }
+
     def compare_images(self, img1_path, img2_path):
         """Compare two images and return similarity score (0-1)."""
         img1 = cv2.imread(img1_path)

@@ -1,13 +1,15 @@
 """Main GUI window for Lineage Classic automation bot."""
 import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext
+from tkinter import ttk, messagebox, scrolledtext, simpledialog, filedialog
 import threading
 import logging
 import os
 
-from core.config import load_config, save_config
+from core.config import (load_config, save_config, list_profiles,
+                          save_profile, load_profile, delete_profile)
 from core.automation import AutomationEngine
 from core.telegram_notifier import TelegramNotifier
+from core.hotkeys import HotkeyManager
 from gui.roi_editor import ROIEditor, ClickPositionEditor
 from gui.image_manager import ImageManager
 from gui.scarecrow_editor import ScarecrowEditor
@@ -24,16 +26,54 @@ class MainWindow:
 
         self.config = load_config()
         self.engine = None
+        self.hotkey_manager = None
 
         self._setup_logging()
+        self._setup_file_logging()
         self._build_ui()
         self._load_settings_to_ui()
+        self._init_hotkeys()
 
     def _setup_logging(self):
         logging.basicConfig(
             level=logging.DEBUG,
             format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         )
+
+    def _setup_file_logging(self):
+        """Set up logging to file."""
+        log_cfg = self.config.get("log_file", {})
+        if not log_cfg.get("enabled", True):
+            return
+        log_path = log_cfg.get("path", "bot.log")
+        file_handler = logging.FileHandler(log_path, encoding="utf-8")
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(
+            logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+        )
+        logging.getLogger().addHandler(file_handler)
+
+    def _init_hotkeys(self):
+        """Initialize global hotkeys."""
+        if not self.config.get("hotkeys", {}).get("enabled", True):
+            return
+        self.hotkey_manager = HotkeyManager(
+            on_start=lambda: self.root.after(0, self._hotkey_start_resume),
+            on_pause=lambda: self.root.after(0, self._pause_automation),
+            on_stop=lambda: self.root.after(0, self._stop_automation),
+        )
+        if self.hotkey_manager.start():
+            logging.getLogger(__name__).info("Global hotkeys active: F9/F10/F11")
+
+    def _hotkey_start_resume(self):
+        """Handle F9: start if idle, resume if paused."""
+        if self.engine and self.engine.state == AutomationEngine.STATE_PAUSED:
+            self._resume_automation()
+        elif not self.engine or self.engine.state in (
+            AutomationEngine.STATE_IDLE, AutomationEngine.STATE_STOPPED,
+            AutomationEngine.STATE_SUCCESS,
+        ):
+            self._start_automation()
 
     def _build_ui(self):
         # Menu bar
@@ -46,6 +86,12 @@ class MainWindow:
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self._on_close)
         menubar.add_cascade(label="File", menu=file_menu)
+
+        profile_menu = tk.Menu(menubar, tearoff=0)
+        profile_menu.add_command(label="Save as Profile...", command=self._save_as_profile)
+        profile_menu.add_command(label="Load Profile...", command=self._load_profile)
+        profile_menu.add_command(label="Delete Profile...", command=self._delete_profile)
+        menubar.add_cascade(label="Profiles", menu=profile_menu)
 
         tools_menu = tk.Menu(menubar, tearoff=0)
         tools_menu.add_command(label="ROI Editor", command=self._open_roi_editor)
@@ -73,6 +119,11 @@ class MainWindow:
         status_frame = ttk.Frame(notebook)
         notebook.add(status_frame, text="Status")
         self._build_status_tab(status_frame)
+
+        # Tab 4: Statistics
+        stats_frame = ttk.Frame(notebook)
+        notebook.add(stats_frame, text="Statistics")
+        self._build_stats_tab(stats_frame)
 
         # Bottom status bar
         self.status_var = tk.StringVar(value="Ready")
@@ -253,6 +304,77 @@ class MainWindow:
                   "Switches to nearest target only when current one disappears.",
                   foreground="gray").pack(anchor=tk.W, padx=10, pady=2)
 
+        # HP Bar Detection Method
+        hp_frame = ttk.LabelFrame(scroll_frame, text="HP Bar Detection")
+        hp_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        self.hp_bar_enabled_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(hp_frame, text="Enable HP bar color detection",
+                        variable=self.hp_bar_enabled_var).pack(anchor=tk.W, padx=10, pady=2)
+
+        self.hp_method_var = tk.StringVar(value="color")
+        ttk.Radiobutton(hp_frame, text="Color detection (fast, recommended)",
+                        variable=self.hp_method_var, value="color").pack(
+            anchor=tk.W, padx=20, pady=1)
+        ttk.Radiobutton(hp_frame, text="OCR number reading",
+                        variable=self.hp_method_var, value="ocr").pack(
+            anchor=tk.W, padx=20, pady=1)
+
+        ttk.Label(hp_frame,
+                  text="Color mode detects HP bar red pixels. More reliable than OCR.\n"
+                  "Set the HP Display ROI in ROI Editor for the HP bar area.",
+                  foreground="gray").pack(anchor=tk.W, padx=10, pady=2)
+
+        # Error Recovery
+        retry_frame = ttk.LabelFrame(scroll_frame, text="Error Recovery")
+        retry_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        retry_row = ttk.Frame(retry_frame)
+        retry_row.pack(fill=tk.X, padx=10, pady=2)
+        ttk.Label(retry_row, text="Step max retries:", width=25).pack(side=tk.LEFT)
+        self.step_retry_var = tk.StringVar(value="3")
+        ttk.Entry(retry_row, textvariable=self.step_retry_var, width=8).pack(
+            side=tk.LEFT, padx=5)
+
+        ocr_row = ttk.Frame(retry_frame)
+        ocr_row.pack(fill=tk.X, padx=10, pady=2)
+        ttk.Label(ocr_row, text="OCR retry count:", width=25).pack(side=tk.LEFT)
+        self.ocr_retry_var = tk.StringVar(value="3")
+        ttk.Entry(ocr_row, textvariable=self.ocr_retry_var, width=8).pack(
+            side=tk.LEFT, padx=5)
+
+        ttk.Label(retry_frame,
+                  text="Retries failed steps before giving up. OCR retries improve\n"
+                  "MP/level reading accuracy. Error screenshots auto-saved.",
+                  foreground="gray").pack(anchor=tk.W, padx=10, pady=2)
+
+        # Hotkeys
+        hotkey_frame = ttk.LabelFrame(scroll_frame, text="Global Hotkeys")
+        hotkey_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        self.hotkeys_enabled_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(hotkey_frame, text="Enable global hotkeys",
+                        variable=self.hotkeys_enabled_var).pack(anchor=tk.W, padx=10, pady=2)
+        ttk.Label(hotkey_frame,
+                  text="F9 = Start / Resume    F10 = Pause    F11 = Stop\n"
+                  "Works even when game window is focused.",
+                  foreground="gray").pack(anchor=tk.W, padx=10, pady=2)
+
+        # Log File
+        logfile_frame = ttk.LabelFrame(scroll_frame, text="Log File")
+        logfile_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        self.logfile_enabled_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(logfile_frame, text="Save logs to file",
+                        variable=self.logfile_enabled_var).pack(anchor=tk.W, padx=10, pady=2)
+
+        logpath_row = ttk.Frame(logfile_frame)
+        logpath_row.pack(fill=tk.X, padx=10, pady=2)
+        ttk.Label(logpath_row, text="Log file path:", width=25).pack(side=tk.LEFT)
+        self.logfile_path_var = tk.StringVar(value="bot.log")
+        ttk.Entry(logpath_row, textvariable=self.logfile_path_var, width=25).pack(
+            side=tk.LEFT, padx=5)
+
         # Level Check Method
         level_frame = ttk.LabelFrame(scroll_frame, text="Level Check Method")
         level_frame.pack(fill=tk.X, padx=10, pady=5)
@@ -381,6 +503,190 @@ class MainWindow:
         for step in steps:
             ttk.Label(workflow_frame, text=step, font=("", 9)).pack(anchor=tk.W, padx=10, pady=1)
 
+    def _build_stats_tab(self, parent):
+        """Build statistics display tab."""
+        # Stats info
+        info_frame = ttk.LabelFrame(parent, text="Current Session")
+        info_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        self.stats_vars = {}
+        stat_items = [
+            ("Elapsed Time:", "elapsed", "00:00:00"),
+            ("Total Iterations:", "total", "0"),
+            ("Successful:", "success", "0"),
+            ("Failed (MP):", "failed", "0"),
+            ("Errors:", "errors", "0"),
+            ("Deaths:", "deaths", "0"),
+            ("Stuck Count:", "stuck", "0"),
+            ("Success Rate:", "rate", "0.0%"),
+        ]
+        for i, (label, key, default) in enumerate(stat_items):
+            ttk.Label(info_frame, text=label, font=("", 10, "bold")).grid(
+                row=i, column=0, sticky=tk.W, padx=10, pady=2)
+            var = tk.StringVar(value=default)
+            ttk.Label(info_frame, textvariable=var, font=("", 10)).grid(
+                row=i, column=1, sticky=tk.W, padx=10, pady=2)
+            self.stats_vars[key] = var
+
+        # MP distribution
+        mp_frame = ttk.LabelFrame(parent, text="MP Distribution by Level")
+        mp_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+        self.stats_text = scrolledtext.ScrolledText(
+            mp_frame, height=10, font=("Consolas", 9), state=tk.DISABLED, wrap=tk.WORD)
+        self.stats_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        # Buttons
+        btn_frame = ttk.Frame(parent)
+        btn_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        ttk.Button(btn_frame, text="Refresh Stats",
+                   command=self._refresh_stats).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Save Stats to File",
+                   command=self._save_stats_to_file).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Export Stats Report",
+                   command=self._export_stats).pack(side=tk.LEFT, padx=5)
+
+    def _refresh_stats(self):
+        """Update statistics display from engine."""
+        if not self.engine or not hasattr(self.engine, 'stats'):
+            return
+        s = self.engine.stats
+        self.stats_vars["elapsed"].set(s.elapsed_str())
+        self.stats_vars["total"].set(str(s.total_iterations))
+        self.stats_vars["success"].set(str(s.successful))
+        self.stats_vars["failed"].set(str(s.failed_mp))
+        self.stats_vars["errors"].set(str(s.errors))
+        self.stats_vars["deaths"].set(str(s.deaths))
+        self.stats_vars["stuck"].set(str(s.stuck_count))
+        self.stats_vars["rate"].set(f"{s.success_rate():.1f}%")
+
+        # Update MP distribution text
+        self.stats_text.config(state=tk.NORMAL)
+        self.stats_text.delete("1.0", tk.END)
+        dist = s.mp_distribution()
+        if dist:
+            for lv in sorted(dist.keys()):
+                mp_counts = dist[lv]
+                parts = [f"MP={mp}: {count}회" for mp, count in sorted(mp_counts.items())]
+                self.stats_text.insert(tk.END, f"Level {lv}: {', '.join(parts)}\n")
+        else:
+            self.stats_text.insert(tk.END, "No MP data yet.\n")
+
+        # Recent level-ups
+        if s.level_times:
+            self.stats_text.insert(tk.END, "\n--- Recent Level-Ups ---\n")
+            for entry in s.level_times[-10:]:
+                t = int(entry["elapsed"])
+                h, t = divmod(t, 3600)
+                m, sec = divmod(t, 60)
+                self.stats_text.insert(
+                    tk.END,
+                    f"  Iter #{entry['iteration']:>4d}  Lv{entry['level']}  "
+                    f"at {h:02d}:{m:02d}:{sec:02d}\n"
+                )
+        self.stats_text.config(state=tk.DISABLED)
+
+    def _save_stats_to_file(self):
+        """Save current stats to text file."""
+        if not self.engine or not hasattr(self.engine, 'stats'):
+            messagebox.showinfo("Info", "No stats available. Start automation first.")
+            return
+        filepath = filedialog.asksaveasfilename(
+            defaultextension=".txt",
+            filetypes=[("Text Files", "*.txt")],
+            initialfile="stats.txt",
+        )
+        if filepath:
+            self.engine.stats.save_to_file(filepath)
+            messagebox.showinfo("Saved", f"Stats saved to {filepath}")
+
+    def _export_stats(self):
+        """Export stats report to a text file."""
+        if not self.engine or not hasattr(self.engine, 'stats'):
+            messagebox.showinfo("Info", "No stats available. Start automation first.")
+            return
+        report = self.engine.stats.summary_text()
+        filepath = filedialog.asksaveasfilename(
+            defaultextension=".txt",
+            filetypes=[("Text Files", "*.txt")],
+            initialfile=f"stats_report.txt",
+        )
+        if filepath:
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(report)
+            messagebox.showinfo("Exported", f"Stats report exported to {filepath}")
+
+    def _save_as_profile(self):
+        """Save current settings as a named profile."""
+        self._apply_ui_to_config()
+        name = simpledialog.askstring("Save Profile", "Enter profile name:")
+        if name:
+            name = name.strip()
+            if not name:
+                return
+            path = save_profile(self.config, name)
+            messagebox.showinfo("Saved", f"Profile '{name}' saved!")
+            self.status_var.set(f"Profile '{name}' saved")
+
+    def _load_profile(self):
+        """Load a named profile."""
+        profiles = list_profiles()
+        if not profiles:
+            messagebox.showinfo("Info", "No profiles saved yet.")
+            return
+
+        # Simple selection dialog
+        win = tk.Toplevel(self.root)
+        win.title("Load Profile")
+        win.geometry("300x400")
+        ttk.Label(win, text="Select a profile:", font=("", 11)).pack(pady=10)
+        listbox = tk.Listbox(win, font=("", 10))
+        listbox.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        for p in profiles:
+            listbox.insert(tk.END, p)
+
+        def on_load():
+            sel = listbox.curselection()
+            if not sel:
+                return
+            name = profiles[sel[0]]
+            self.config = load_profile(name)
+            self._load_settings_to_ui()
+            save_config(self.config)
+            self.status_var.set(f"Profile '{name}' loaded")
+            win.destroy()
+
+        ttk.Button(win, text="Load", command=on_load).pack(pady=10)
+
+    def _delete_profile(self):
+        """Delete a named profile."""
+        profiles = list_profiles()
+        if not profiles:
+            messagebox.showinfo("Info", "No profiles saved yet.")
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title("Delete Profile")
+        win.geometry("300x400")
+        ttk.Label(win, text="Select a profile to delete:", font=("", 11)).pack(pady=10)
+        listbox = tk.Listbox(win, font=("", 10))
+        listbox.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        for p in profiles:
+            listbox.insert(tk.END, p)
+
+        def on_delete():
+            sel = listbox.curselection()
+            if not sel:
+                return
+            name = profiles[sel[0]]
+            if messagebox.askyesno("Confirm", f"Delete profile '{name}'?"):
+                delete_profile(name)
+                listbox.delete(sel[0])
+                self.status_var.set(f"Profile '{name}' deleted")
+
+        ttk.Button(win, text="Delete", command=on_delete).pack(pady=10)
+
     def _toggle_arduino(self):
         pass  # Arduino frame is always visible
 
@@ -421,6 +727,23 @@ class MainWindow:
         self.config["target_lock"] = {
             "enabled": self.target_lock_var.get(),
             "position_tolerance": int(self.target_tolerance_var.get()) if self.target_tolerance_var.get() else 30,
+        }
+
+        self.config["hp_bar_detection"] = {
+            "enabled": self.hp_bar_enabled_var.get(),
+            "method": self.hp_method_var.get(),
+        }
+
+        self.config["step_retry"] = {
+            "max_retries": int(self.step_retry_var.get()) if self.step_retry_var.get() else 3,
+            "retry_delay": 2,
+        }
+        self.config["ocr_retry_count"] = int(self.ocr_retry_var.get()) if self.ocr_retry_var.get() else 3
+
+        self.config["hotkeys"] = {"enabled": self.hotkeys_enabled_var.get()}
+        self.config["log_file"] = {
+            "enabled": self.logfile_enabled_var.get(),
+            "path": self.logfile_path_var.get() or "bot.log",
         }
 
         self.config["telegram_bot_token"] = self.tg_token_var.get()
@@ -472,6 +795,24 @@ class MainWindow:
         target = self.config.get("target_lock", {})
         self.target_lock_var.set(target.get("enabled", True))
         self.target_tolerance_var.set(str(target.get("position_tolerance", 30)))
+
+        # HP bar detection
+        hp_bar = self.config.get("hp_bar_detection", {})
+        self.hp_bar_enabled_var.set(hp_bar.get("enabled", True))
+        self.hp_method_var.set(hp_bar.get("method", "color"))
+
+        # Error recovery
+        step_retry = self.config.get("step_retry", {})
+        self.step_retry_var.set(str(step_retry.get("max_retries", 3)))
+        self.ocr_retry_var.set(str(self.config.get("ocr_retry_count", 3)))
+
+        # Hotkeys
+        self.hotkeys_enabled_var.set(self.config.get("hotkeys", {}).get("enabled", True))
+
+        # Log file
+        log_cfg = self.config.get("log_file", {})
+        self.logfile_enabled_var.set(log_cfg.get("enabled", True))
+        self.logfile_path_var.set(log_cfg.get("path", "bot.log"))
 
         self.tg_token_var.set(self.config.get("telegram_bot_token", ""))
         self.tg_chat_var.set(self.config.get("telegram_chat_id", ""))
@@ -593,11 +934,14 @@ class MainWindow:
         self.status_var.set("Stopped")
 
     def _update_status(self):
-        """Periodically update status labels."""
+        """Periodically update status labels and stats."""
         if self.engine:
             self.status_labels["state"].set(self.engine.state)
             self.status_labels["step"].set(str(self.engine.current_step))
             self.status_labels["iteration"].set(str(self.engine.iteration_count))
+
+            # Update stats display
+            self._refresh_stats()
 
             if self.engine.state in (
                 AutomationEngine.STATE_RUNNING,
@@ -606,8 +950,10 @@ class MainWindow:
                 self.root.after(500, self._update_status)
             elif self.engine.state == AutomationEngine.STATE_SUCCESS:
                 self.status_var.set("SUCCESS! MP 9 found at Level 5!")
+                self._refresh_stats()
                 self._stop_automation()
             elif self.engine.state == AutomationEngine.STATE_STOPPED:
+                self._refresh_stats()
                 self._stop_automation()
 
     def _on_close(self):
@@ -615,6 +961,8 @@ class MainWindow:
             if not messagebox.askyesno("Confirm", "Automation is running. Stop and exit?"):
                 return
             self.engine.stop()
+        if self.hotkey_manager:
+            self.hotkey_manager.stop()
         self._apply_ui_to_config()
         save_config(self.config)
         self.root.destroy()

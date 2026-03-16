@@ -1,12 +1,15 @@
 """Main automation workflow engine for Lineage Classic bot."""
 import math
+import os
 import time
 import logging
 import threading
+from datetime import datetime
 
 from core.image_recognition import ImageRecognition
 from core.input_handler import create_input_handler
 from core.telegram_notifier import TelegramNotifier
+from core.stats import StatsTracker
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +61,19 @@ class AutomationEngine:
         )
         self.iteration_count = 0
         self.current_step = 0
+        self.stats = StatsTracker()
+
+        # Error screenshot directory
+        self._error_ss_dir = config.get("error_screenshot_dir", "error_screenshots")
+        os.makedirs(self._error_ss_dir, exist_ok=True)
+
+        # OCR retry count
+        self._ocr_retries = config.get("ocr_retry_count", 3)
+
+        # Step retry settings
+        step_retry = config.get("step_retry", {})
+        self._step_max_retries = step_retry.get("max_retries", 3)
+        self._step_retry_delay = step_retry.get("retry_delay", 2)
 
     def _log(self, msg, level="info"):
         logger.log(getattr(logging, level.upper(), logging.INFO), msg)
@@ -106,6 +122,53 @@ class AutomationEngine:
             time.sleep(interval)
         return False, 0, 0
 
+    def _ocr_number_retry(self, region, retries=None):
+        """OCR a number with retries for reliability.
+        Returns int or None.
+        """
+        retries = retries or self._ocr_retries
+        for attempt in range(retries):
+            result = self.recognizer.ocr_number(region)
+            if result is not None:
+                return result
+            if attempt < retries - 1:
+                time.sleep(0.3)
+        return None
+
+    def _save_error_screenshot(self, step_name):
+        """Save a screenshot when an error occurs for debugging."""
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"error_{step_name}_{timestamp}.png"
+            filepath = os.path.join(self._error_ss_dir, filename)
+            self.recognizer.save_region_as_template(None, filepath)
+            self._log(f"Error screenshot saved: {filepath}")
+            return filepath
+        except Exception as e:
+            self._log(f"Failed to save error screenshot: {e}", "error")
+            return None
+
+    def _run_step_with_retry(self, step_func, step_name, max_retries=None):
+        """Run a step function with retry logic.
+        step_func should return (success, *results).
+        Returns the step_func result on success, or None on all retries exhausted.
+        """
+        max_retries = max_retries or self._step_max_retries
+        for attempt in range(max_retries):
+            self._check_stop()
+            self._wait_pause()
+            result = step_func()
+            if result[0]:  # success
+                return result
+            if attempt < max_retries - 1:
+                self._log(f"Step '{step_name}' failed (attempt {attempt + 1}/{max_retries}), "
+                          f"retrying in {self._step_retry_delay}s...", "warning")
+                self._sleep(self._step_retry_delay)
+            else:
+                self._log(f"Step '{step_name}' failed after {max_retries} attempts", "error")
+                self._save_error_screenshot(step_name)
+        return None
+
     def start(self):
         """Start automation in a new thread."""
         if self.state == self.STATE_RUNNING:
@@ -146,22 +209,35 @@ class AutomationEngine:
 
     def _run_loop(self):
         """Main automation loop."""
+        self.stats.reset()
+        self.stats.start()
         try:
             self._init_input()
             while not self._stop_event.is_set():
                 self.iteration_count += 1
-                self._log(f"=== Iteration {self.iteration_count} ===")
+                self.stats.record_iteration()
+                self._log(f"=== Iteration {self.iteration_count} "
+                          f"[{self.stats.elapsed_str()}] ===")
                 result = self._run_single_cycle()
                 if result == "success":
                     self.state = self.STATE_SUCCESS
+                    self.stats.record_success()
                     self._log("SUCCESS! MP 9 at Level 5 found!")
+                    self._log(f"Stats: {self.stats.total_iterations} iterations, "
+                              f"{self.stats.elapsed_str()} elapsed")
                     self.telegram.send_message(
                         f"Lineage Bot: SUCCESS! Found MP 9 at Level 5. "
-                        f"Iteration: {self.iteration_count}"
+                        f"Iteration: {self.iteration_count}, "
+                        f"Time: {self.stats.elapsed_str()}"
                     )
                     break
                 elif result == "delete_and_retry":
                     self._log("Character doesn't meet criteria, deleting and retrying...")
+                    continue
+                elif result == "error":
+                    self.stats.record_error()
+                    self._log("Cycle ended with error, retrying...")
+                    self._sleep(2)
                     continue
                 else:
                     self._log(f"Cycle ended with result: {result}")
@@ -169,10 +245,18 @@ class AutomationEngine:
             self._log("Automation stopped by user")
         except Exception as e:
             self._log(f"Error: {e}", "error")
+            self._save_error_screenshot("unexpected")
             logger.exception("Automation error")
         finally:
             if self.input:
                 self.input.close()
+            # Save stats on finish
+            try:
+                self.stats.save_to_file("stats.txt")
+                self.stats.append_to_file("stats_log.txt")
+                self._log("Statistics saved to stats.txt and stats_log.txt")
+            except Exception as e:
+                self._log(f"Failed to save stats: {e}", "error")
             if self.state != self.STATE_SUCCESS:
                 self.state = self.STATE_STOPPED
             self._log("Automation finished")
@@ -184,23 +268,21 @@ class AutomationEngine:
         # Step 1: Double-click empty slot
         self.current_step = 1
         self._log("Step 1: Finding empty slot...")
-        self._check_stop()
-        found, x, y = self._wait_and_find("empty_slot", "empty_slot", timeout=15)
-        if not found:
-            self._log("Empty slot not found!", "error")
+        result = self._run_step_with_retry(
+            lambda: self._step_find_and_click("empty_slot", "empty_slot", double=True, timeout=15),
+            "find_empty_slot")
+        if result is None:
             return "error"
-        self.input.double_click(x, y)
         self._sleep(1)
 
         # Step 2: Click knight icon
         self.current_step = 2
         self._log("Step 2: Clicking knight icon...")
-        self._check_stop()
-        found, x, y = self._wait_and_find("knight_icon", "knight_icon", timeout=10)
-        if not found:
-            self._log("Knight icon not found!", "error")
+        result = self._run_step_with_retry(
+            lambda: self._step_find_and_click("knight_icon", "knight_icon", timeout=10),
+            "find_knight_icon")
+        if result is None:
             return "error"
-        self.input.click(x, y)
         self._sleep(1)
 
         # Step 3: Verify knight image, retry click if needed
@@ -236,12 +318,11 @@ class AutomationEngine:
         # Step 5: Click confirm to create character
         self.current_step = 5
         self._log("Step 5: Confirming character creation...")
-        self._check_stop()
-        found, x, y = self._wait_and_find("confirm_button", "confirm_button", timeout=5)
-        if not found:
-            self._log("Confirm button not found!", "error")
+        result = self._run_step_with_retry(
+            lambda: self._step_find_and_click("confirm_button", "confirm_button", timeout=5),
+            "find_confirm_button")
+        if result is None:
             return "error"
-        self.input.click(x, y)
         self._sleep(2)
 
         # Step 6: Double-click character to enter game
@@ -260,22 +341,21 @@ class AutomationEngine:
         self._check_stop()
         self.input.press_key("tab")
         self._sleep(1)
-        found, x, y = self._wait_and_find("item_icon", "item_slot", timeout=10)
-        if not found:
-            self._log("Item icon not found!", "error")
+        result = self._run_step_with_retry(
+            lambda: self._step_find_and_click("item_icon", "item_slot", double=True, timeout=10),
+            "find_item_icon")
+        if result is None:
             return "error"
-        self.input.double_click(x, y)
         self._sleep(1)
 
         # Step 8: Click text in popup
         self.current_step = 8
         self._log("Step 8: Clicking popup text...")
-        self._check_stop()
-        found, x, y = self._wait_and_find("popup_text", "popup_text", timeout=10)
-        if not found:
-            self._log("Popup text not found!", "error")
+        result = self._run_step_with_retry(
+            lambda: self._step_find_and_click("popup_text", "popup_text", timeout=10),
+            "find_popup_text")
+        if result is None:
             return "error"
-        self.input.click(x, y)
         self._sleep(1)
 
         # Step 9: Wait, click point, then find & click scarecrow
@@ -295,6 +375,19 @@ class AutomationEngine:
         result = self._scarecrow_loop()
         return result
 
+    def _step_find_and_click(self, image_key, region_key, double=False, timeout=10):
+        """Helper for step retry: find template and click.
+        Returns (True, x, y) or (False, 0, 0).
+        """
+        found, x, y = self._wait_and_find(image_key, region_key, timeout=timeout)
+        if found:
+            if double:
+                self.input.double_click(x, y)
+            else:
+                self.input.click(x, y)
+            return (True, x, y)
+        return (False, 0, 0)
+
     def _capture_progress_snapshot(self, level_region, exp_region):
         """Capture current level and EXP display image for change detection.
         Returns (level_number_or_None, exp_image_bytes).
@@ -305,7 +398,7 @@ class AutomationEngine:
             exp_img = self.recognizer.capture_screen(exp_region).tobytes()
         return level, exp_img
 
-    def _check_death(self, death_template, revival_template, hp_region):
+    def _check_death(self, death_template, revival_template, hp_region, use_color=True):
         """Check if character has died (HP=0) and attempt recovery.
         Returns True if death was detected and recovery attempted.
         """
@@ -318,8 +411,15 @@ class AutomationEngine:
             if found:
                 death_detected = True
 
-        # Method 2: Check HP display via OCR (HP = 0)
-        if not death_detected and hp_region and hp_region.get("w", 0) > 5:
+        # Method 2: HP bar color detection (fast and reliable)
+        if not death_detected and use_color and hp_region and hp_region.get("w", 0) > 5:
+            hp_info = self.recognizer.check_hp_bar(hp_region)
+            if hp_info["is_dead"]:
+                death_detected = True
+                self._log(f"HP bar empty (ratio={hp_info['hp_ratio']:.3f})", "warning")
+
+        # Method 3: Check HP display via OCR (HP = 0) as fallback
+        if not death_detected and not use_color and hp_region and hp_region.get("w", 0) > 5:
             hp_val = self.recognizer.ocr_number(hp_region)
             if hp_val is not None and hp_val == 0:
                 death_detected = True
@@ -418,6 +518,8 @@ class AutomationEngine:
         hp_check_interval = death_cfg.get("hp_check_interval", 2)
         death_template = self.config["images"].get("death_screen", "")
         revival_template = self.config["images"].get("revival_button", "")
+        hp_bar_cfg = self.config.get("hp_bar_detection", {})
+        hp_use_color = hp_bar_cfg.get("enabled", True) and hp_bar_cfg.get("method", "color") == "color"
         last_death_check = time.time()
 
         # Target lock settings
@@ -489,7 +591,9 @@ class AutomationEngine:
                 now = time.time()
                 if now - last_death_check >= hp_check_interval:
                     last_death_check = now
-                    if self._check_death(death_template, revival_template, hp_region):
+                    if self._check_death(death_template, revival_template, hp_region,
+                                         use_color=hp_use_color):
+                        self.stats.record_death()
                         last_progress_time = time.time()
                         last_target_pos = None
                         continue
@@ -507,6 +611,7 @@ class AutomationEngine:
                         positions_to_use = None
 
                     if positions_to_use:
+                        self.stats.record_stuck()
                         self._log(f"Stuck detected! No progress for {stuck_timeout}s. "
                                   f"Clicking unstuck position #{unstuck_idx + 1}...", "warning")
                         pos = positions_to_use[unstuck_idx % len(positions_to_use)]
@@ -595,29 +700,34 @@ class AutomationEngine:
                     current_level = cur_level
 
             if leveled_up:
-                # Re-read level via OCR for accuracy
-                ocr_level = self.recognizer.ocr_number(level_region)
+                # Re-read level via OCR for accuracy (with retry)
+                ocr_level = self._ocr_number_retry(level_region)
                 if ocr_level is not None:
                     current_level = ocr_level
                 else:
                     current_level += 1
 
                 self._log(f"Level up detected! Current level: {current_level}")
+                self.stats.record_level_up(current_level, self.iteration_count)
 
-                # Check MP
+                # Check MP (with retry)
                 required_mp = mp_requirements.get(current_level)
                 if required_mp is None:
                     # Level not in requirements, keep clicking
                     continue
 
-                actual_mp = self.recognizer.ocr_number(mp_region)
+                actual_mp = self._ocr_number_retry(mp_region)
                 self._log(f"Level {current_level}: MP = {actual_mp} (need {required_mp})")
 
                 if current_level == 5:
                     if actual_mp == 9:
+                        self.stats.record_mp_pass(current_level, actual_mp,
+                                                  self.iteration_count)
                         return "success"
                     else:
                         self._log(f"Level 5 but MP={actual_mp}, not 9. Deleting character.")
+                        self.stats.record_mp_fail(current_level, actual_mp, 9,
+                                                  self.iteration_count)
                         self._exit_and_delete()
                         return "delete_and_retry"
 
@@ -626,9 +736,12 @@ class AutomationEngine:
                         f"Level {current_level} MP={actual_mp} != {required_mp}. "
                         "Deleting character."
                     )
+                    self.stats.record_mp_fail(current_level, actual_mp, required_mp,
+                                              self.iteration_count)
                     self._exit_and_delete()
                     return "delete_and_retry"
 
+                self.stats.record_mp_pass(current_level, actual_mp, self.iteration_count)
                 self._log(f"Level {current_level} MP={required_mp} OK, continuing...")
                 # Continue scarecrow clicking
 

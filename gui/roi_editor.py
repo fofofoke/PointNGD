@@ -328,6 +328,10 @@ class ROIEditor(tk.Toplevel):
         real_w = int((x2 - x1) / self.scale_factor)
         real_h = int((y2 - y1) / self.scale_factor)
 
+        if real_w < 5 or real_h < 5:
+            self.drag_start = None
+            return
+
         self.config["roi"][self.current_roi_key] = {
             "x": real_x, "y": real_y, "w": real_w, "h": real_h
         }
@@ -349,9 +353,21 @@ class ROIEditor(tk.Toplevel):
         self.roi_listbox.insert(idx, f"[SET] {label}")
         self.roi_listbox.selection_set(idx)
 
+        # Auto-capture template image when ROI is set by drag
+        saved_msg = ""
+        if self.screenshot and self.current_roi_key in self.CAPTURABLE_ROIS:
+            cropped = self.screenshot.crop((
+                real_x, real_y, real_x + real_w, real_y + real_h,
+            ))
+            self._save_captured_image(cropped)
+            saved_msg = " + template image saved"
+
         self.drag_start = None
         self._display_screenshot()
-        self.status_var.set(f"ROI '{self.current_roi_key}' updated: {real_x},{real_y} {real_w}x{real_h}")
+        self.status_var.set(
+            f"ROI '{self.current_roi_key}' updated: {real_x},{real_y} "
+            f"{real_w}x{real_h}{saved_msg}"
+        )
 
     def _apply_manual(self):
         if self.current_roi_key is None:
@@ -624,6 +640,17 @@ class ClickPositionEditor(tk.Toplevel):
 
     def _pick_position(self, key, x_var, y_var):
         """Open the screen picker (window-aware)."""
+        # Re-resolve target window each time (it may have moved or appeared)
+        self._resolve_target_window()
+        if not self._window_id:
+            messagebox.showwarning(
+                "Warning",
+                "Target window not found.\n"
+                "Please set target_window_title in settings and ensure the window is open.\n"
+                "Coordinates must be window-relative for automation to work correctly.",
+            )
+            return
+
         self.withdraw()
         self.update()
 
@@ -662,7 +689,8 @@ class ScreenPicker(tk.Toplevel):
 
     If window_id is set, shows only that window's capture and returns
     window-relative coordinates.  Otherwise shows a fullscreen overlay
-    and returns absolute screen coordinates.
+    and returns absolute screen coordinates (converted to window-relative
+    when the target window rect is known).
     """
 
     def __init__(self, parent, window_id=None, callback=None):
@@ -681,7 +709,11 @@ class ScreenPicker(tk.Toplevel):
             self._build_fullscreen_mode()
 
     def _build_fullscreen_mode(self):
-        """Legacy fullscreen overlay for absolute coordinates."""
+        """Fullscreen overlay. Converts to window-relative if target window is known."""
+        # Try to get window rect for conversion even in fullscreen mode
+        if self._window_id and not self._window_rect:
+            self._window_rect = get_window_rect(self._window_id)
+
         self.attributes("-fullscreen", True)
         self.attributes("-alpha", 0.3)
         self.configure(bg="black")
@@ -690,8 +722,13 @@ class ScreenPicker(tk.Toplevel):
         self.bind("<ButtonPress-1>", self._on_click_fullscreen)
         self.bind("<Escape>", lambda e: self.destroy())
 
+        if self._window_rect:
+            hint = ("Click on the target window to set position.\n"
+                    "Coordinates will be converted to window-relative. (ESC to cancel)")
+        else:
+            hint = "Click anywhere to set position (ESC to cancel)"
         label = tk.Label(
-            self, text="Click anywhere to set position (ESC to cancel)",
+            self, text=hint,
             fg="white", bg="black", font=("", 16),
         )
         label.place(relx=0.5, rely=0.1, anchor=tk.CENTER)
@@ -722,7 +759,8 @@ class ScreenPicker(tk.Toplevel):
         self.resizable(False, False)
 
         label = ttk.Label(self,
-                          text="Click on the target window image to pick a position. ESC to cancel.")
+                          text="Click on the target window image to pick a position. "
+                          "Coordinates are window-relative. ESC to cancel.")
         label.pack(pady=5)
 
         self.canvas = tk.Canvas(self, width=disp_w, height=disp_h,
@@ -741,6 +779,10 @@ class ScreenPicker(tk.Toplevel):
     def _on_click_fullscreen(self, event):
         x = event.x_root
         y = event.y_root
+        # Convert absolute screen coords to window-relative if possible
+        if self._window_rect:
+            x -= self._window_rect["x"]
+            y -= self._window_rect["y"]
         if self.callback:
             self.callback(x, y)
         self.destroy()

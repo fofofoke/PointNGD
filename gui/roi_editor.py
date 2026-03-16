@@ -169,38 +169,41 @@ class ROIEditor(tk.Toplevel):
         ttk.Label(self, textvariable=self.status_var).pack(side=tk.BOTTOM, fill=tk.X)
 
     def _capture_screen(self):
-        """Capture the target window (or full screen if no target)."""
+        """Capture the target window (requires a valid target window)."""
+        # Re-resolve in case window appeared or moved
+        self._resolve_target_window()
+        if not self._window_id:
+            messagebox.showerror(
+                "Error",
+                "Target window not found.\n"
+                "Please set target_window_title in settings and ensure the window is open.",
+            )
+            return
+
         self.withdraw()
         self.update()
         time.sleep(0.5)
 
-        if self._window_id:
-            # Refresh window rect in case it moved
-            self._window_rect = get_window_rect(self._window_id)
-            if not self._window_rect:
-                self.deiconify()
-                messagebox.showerror("Error", "Target window not found. Is it still open?")
-                return
-            img, rect = capture_window(self._window_id)
-            if img is None:
-                self.deiconify()
-                messagebox.showerror("Error", "Failed to capture target window.")
-                return
-            self.screenshot = img
-            self.screen_width = rect["w"]
-            self.screen_height = rect["h"]
-        else:
-            with mss.mss() as sct:
-                monitor = sct.monitors[1]
-                screenshot = sct.grab(monitor)
-                self.screenshot = Image.frombytes("RGB", screenshot.size, screenshot.rgb)
-                self.screen_width = monitor["width"]
-                self.screen_height = monitor["height"]
+        self._window_rect = get_window_rect(self._window_id)
+        if not self._window_rect:
+            self.deiconify()
+            messagebox.showerror("Error", "Target window not found. Is it still open?")
+            return
+        img, rect = capture_window(self._window_id)
+        if img is None:
+            self.deiconify()
+            messagebox.showerror("Error", "Failed to capture target window.")
+            return
+        self.screenshot = img
+        self.screen_width = rect["w"]
+        self.screen_height = rect["h"]
 
         self.deiconify()
         self._display_screenshot()
-        mode = "window" if self._window_id else "full screen"
-        self.status_var.set(f"Captured ({mode}). Select a ROI, then drag on the image.")
+        self.status_var.set(
+            f"Captured window ({rect['w']}x{rect['h']}). "
+            f"Select a ROI, then drag on the image."
+        )
 
     def _capture_selected_window(self):
         """Show a window list dialog and capture the selected window."""
@@ -441,13 +444,22 @@ class ROIEditor(tk.Toplevel):
         time.sleep(0.5)
 
         # Convert window-relative ROI to absolute screen coords for capture
-        abs_x = roi["x"]
-        abs_y = roi["y"]
-        if self._window_id:
-            self._window_rect = get_window_rect(self._window_id)
-            if self._window_rect:
-                abs_x += self._window_rect["x"]
-                abs_y += self._window_rect["y"]
+        self._resolve_target_window()
+        if not self._window_id:
+            self.deiconify()
+            messagebox.showerror(
+                "Error",
+                "Target window not found.\n"
+                "Please set target_window_title in settings and ensure the window is open.",
+            )
+            return
+        self._window_rect = get_window_rect(self._window_id)
+        if not self._window_rect:
+            self.deiconify()
+            messagebox.showerror("Error", "Failed to get target window geometry.")
+            return
+        abs_x = roi["x"] + self._window_rect["x"]
+        abs_y = roi["y"] + self._window_rect["y"]
 
         with mss.mss() as sct:
             monitor = {
@@ -598,8 +610,9 @@ class ClickPositionEditor(tk.Toplevel):
                       wraplength=450).pack(pady=5)
         else:
             ttk.Label(self,
-                      text="No target window. Coordinates are screen-absolute.\n"
-                      "Click 'Pick' to select a position by clicking on screen.",
+                      text="No target window configured.\n"
+                      "Please set target_window_title in settings first.",
+                      foreground="red",
                       wraplength=450).pack(pady=5)
 
         self.entries = {}
@@ -685,12 +698,10 @@ class ClickPositionEditor(tk.Toplevel):
 
 
 class ScreenPicker(tk.Toplevel):
-    """Pick a screen position.
+    """Pick a screen position on the target window.
 
-    If window_id is set, shows only that window's capture and returns
-    window-relative coordinates.  Otherwise shows a fullscreen overlay
-    and returns absolute screen coordinates (converted to window-relative
-    when the target window rect is known).
+    Shows the target window capture and returns window-relative coordinates.
+    Requires a valid window_id.
     """
 
     def __init__(self, parent, window_id=None, callback=None):
@@ -706,32 +717,13 @@ class ScreenPicker(tk.Toplevel):
         if self._window_rect:
             self._build_window_mode()
         else:
-            self._build_fullscreen_mode()
-
-    def _build_fullscreen_mode(self):
-        """Fullscreen overlay. Converts to window-relative if target window is known."""
-        # Try to get window rect for conversion even in fullscreen mode
-        if self._window_id and not self._window_rect:
-            self._window_rect = get_window_rect(self._window_id)
-
-        self.attributes("-fullscreen", True)
-        self.attributes("-alpha", 0.3)
-        self.configure(bg="black")
-        self.config(cursor="crosshair")
-
-        self.bind("<ButtonPress-1>", self._on_click_fullscreen)
-        self.bind("<Escape>", lambda e: self.destroy())
-
-        if self._window_rect:
-            hint = ("Click on the target window to set position.\n"
-                    "Coordinates will be converted to window-relative. (ESC to cancel)")
-        else:
-            hint = "Click anywhere to set position (ESC to cancel)"
-        label = tk.Label(
-            self, text=hint,
-            fg="white", bg="black", font=("", 16),
-        )
-        label.place(relx=0.5, rely=0.1, anchor=tk.CENTER)
+            # No valid target window
+            messagebox.showerror(
+                "Error",
+                "Target window not found.\n"
+                "Please set target_window_title in settings and ensure the window is open.",
+            )
+            self.after(10, self.destroy)
 
     def _build_window_mode(self):
         """Capture target window and let user click on the image."""
@@ -744,7 +736,7 @@ class ScreenPicker(tk.Toplevel):
         self._window_rect = rect
         self._capture_img = img
 
-        # Size the picker window to fit image (max 80% of screen)
+        # Size the picker window to fit image (max 85% of screen)
         with mss.mss() as sct:
             scr_w = sct.monitors[1]["width"]
             scr_h = sct.monitors[1]["height"]
@@ -775,17 +767,6 @@ class ScreenPicker(tk.Toplevel):
         self.bind("<Escape>", lambda e: self.destroy())
         self.focus_set()
         self.grab_set()
-
-    def _on_click_fullscreen(self, event):
-        x = event.x_root
-        y = event.y_root
-        # Convert absolute screen coords to window-relative if possible
-        if self._window_rect:
-            x -= self._window_rect["x"]
-            y -= self._window_rect["y"]
-        if self.callback:
-            self.callback(x, y)
-        self.destroy()
 
     def _on_click_window(self, event):
         # Convert canvas coords back to window-relative pixel coords

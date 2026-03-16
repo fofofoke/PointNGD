@@ -1,0 +1,85 @@
+"""Configuration manager for saving/loading all settings."""
+import json
+import os
+
+DEFAULT_CONFIG = {
+    "input_method": "software",  # "software" or "arduino"
+    "arduino_port": "COM3",
+    "arduino_baudrate": 9600,
+    "character_name": "Knight001",
+    "telegram_bot_token": "",
+    "telegram_chat_id": "",
+    "level_check_method": "both",  # "ocr", "image", "both"
+    "scarecrow_click_delay": 0.5,
+    "wait_after_enter_game": 5,
+    "wait_before_scarecrow": 3,
+    "delete_wait_time": 10,
+    "roi": {
+        "empty_slot": {"x": 0, "y": 0, "w": 100, "h": 100},
+        "knight_icon": {"x": 0, "y": 0, "w": 100, "h": 100},
+        "knight_verify": {"x": 0, "y": 0, "w": 100, "h": 100},
+        "name_input": {"x": 0, "y": 0, "w": 100, "h": 100},
+        "confirm_button": {"x": 0, "y": 0, "w": 100, "h": 100},
+        "character_slot": {"x": 0, "y": 0, "w": 100, "h": 100},
+        "tab_area": {"x": 0, "y": 0, "w": 100, "h": 100},
+        "item_slot": {"x": 0, "y": 0, "w": 100, "h": 100},
+        "popup_text": {"x": 0, "y": 0, "w": 100, "h": 100},
+        "scarecrow_search": {"x": 0, "y": 0, "w": 400, "h": 400},
+        "level_display": {"x": 0, "y": 0, "w": 80, "h": 30},
+        "mp_display": {"x": 0, "y": 0, "w": 80, "h": 30},
+        "exit_button": {"x": 0, "y": 0, "w": 100, "h": 100},
+        "delete_button": {"x": 0, "y": 0, "w": 100, "h": 100},
+        "delete_popup": {"x": 0, "y": 0, "w": 200, "h": 100},
+        "click_after_enter": {"x": 0, "y": 0, "w": 10, "h": 10},
+    },
+    "click_positions": {
+        "knight_verify_click": {"x": 0, "y": 0},
+        "name_input_click": {"x": 0, "y": 0},
+        "character_slot_click": {"x": 0, "y": 0},
+        "tab_click": {"x": 0, "y": 0},
+        "after_enter_click": {"x": 0, "y": 0},
+        "exit_confirm_click": {"x": 0, "y": 0},
+        "delete_click": {"x": 0, "y": 0},
+    },
+    "images": {
+        "empty_slot": "",
+        "knight_icon": "",
+        "knight_verify": "",
+        "confirm_button": "",
+        "item_icon": "",
+        "popup_text": "",
+        "scarecrow": "",
+        "level_up_effect": "",
+        "exit_button": "",
+        "delete_popup": "",
+    },
+}
+
+CONFIG_FILE = "config.json"
+
+
+def load_config(path=None):
+    """Load configuration from file, merging with defaults."""
+    filepath = path or CONFIG_FILE
+    config = json.loads(json.dumps(DEFAULT_CONFIG))
+    if os.path.exists(filepath):
+        with open(filepath, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+        _deep_merge(config, saved)
+    return config
+
+
+def save_config(config, path=None):
+    """Save configuration to file."""
+    filepath = path or CONFIG_FILE
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2, ensure_ascii=False)
+
+
+def _deep_merge(base, override):
+    """Recursively merge override into base dict."""
+    for key, value in override.items():
+        if key in base and isinstance(base[key], dict) and isinstance(value, dict):
+            _deep_merge(base[key], value)
+        else:
+            base[key] = value

@@ -335,7 +335,7 @@ class MainWindow:
             self.config.update(cfg)
             save_config(self.config)
 
-        ROIEditor(self.root, self.config, on_save=on_save)
+        ROIEditor(self.root, self.config, images_dir="images", on_save=on_save)
 
     def _open_click_editor(self):
         def on_save(cfg):

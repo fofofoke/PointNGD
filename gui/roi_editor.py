@@ -3,7 +3,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from PIL import Image, ImageTk, ImageDraw
 import mss
-import json
+import os
 
 
 class ROIEditor(tk.Toplevel):
@@ -28,10 +28,18 @@ class ROIEditor(tk.Toplevel):
         "click_after_enter": "Click After Enter Game",
     }
 
-    def __init__(self, parent, config, on_save=None):
+    # ROI keys that correspond to an image template in config["images"]
+    CAPTURABLE_ROIS = {
+        "empty_slot", "knight_icon", "knight_verify", "confirm_button",
+        "item_slot", "popup_text", "scarecrow_search", "level_display",
+        "mp_display", "exit_button", "delete_button", "delete_popup",
+    }
+
+    def __init__(self, parent, config, images_dir="images", on_save=None):
         super().__init__(parent)
         self.title("ROI Editor")
         self.config = config
+        self.images_dir = images_dir
         self.on_save = on_save
         self.current_roi_key = None
         self.screenshot = None
@@ -40,6 +48,7 @@ class ROIEditor(tk.Toplevel):
         self.drag_rect = None
         self.scale_factor = 1.0
 
+        os.makedirs(images_dir, exist_ok=True)
         self.geometry("1200x800")
         self._build_ui()
 
@@ -84,6 +93,22 @@ class ROIEditor(tk.Toplevel):
             self.manual_vars[label[0].lower()] = var
 
         ttk.Button(manual_frame, text="Apply Manual", command=self._apply_manual).pack(pady=5)
+
+        # Capture as image section
+        capture_frame = ttk.LabelFrame(left_frame, text="Capture ROI as Image")
+        capture_frame.pack(fill=tk.X, pady=5)
+
+        ttk.Button(
+            capture_frame, text="Capture from Screenshot",
+            command=self._capture_roi_from_screenshot,
+        ).pack(fill=tk.X, padx=5, pady=2)
+        ttk.Button(
+            capture_frame, text="Capture Live Screen",
+            command=self._capture_roi_live,
+        ).pack(fill=tk.X, padx=5, pady=2)
+
+        self.capture_preview_label = ttk.Label(capture_frame, text="")
+        self.capture_preview_label.pack(padx=5, pady=2)
 
         # Buttons
         btn_frame = ttk.Frame(left_frame)
@@ -264,6 +289,85 @@ class ROIEditor(tk.Toplevel):
             self.on_save(self.config)
         self.status_var.set("All ROIs saved!")
         messagebox.showinfo("Saved", "ROI settings saved successfully!")
+
+    def _capture_roi_from_screenshot(self):
+        """Crop the selected ROI from the already-captured screenshot and save as template image."""
+        if self.current_roi_key is None:
+            messagebox.showwarning("Warning", "Select a ROI from the list first")
+            return
+        if self.current_roi_key not in self.CAPTURABLE_ROIS:
+            messagebox.showinfo("Info", "This ROI is not associated with a template image.")
+            return
+        if self.screenshot is None:
+            messagebox.showwarning("Warning", "Capture the screen first (click 'Capture Screen')")
+            return
+
+        roi = self.config["roi"].get(self.current_roi_key, {})
+        if roi.get("w", 0) <= 5 or roi.get("h", 0) <= 5:
+            messagebox.showwarning("Warning", "ROI is too small. Drag to set the region first.")
+            return
+
+        # Crop from the stored screenshot
+        cropped = self.screenshot.crop((
+            roi["x"], roi["y"],
+            roi["x"] + roi["w"], roi["y"] + roi["h"],
+        ))
+        self._save_captured_image(cropped)
+
+    def _capture_roi_live(self):
+        """Capture the selected ROI region directly from the live screen."""
+        if self.current_roi_key is None:
+            messagebox.showwarning("Warning", "Select a ROI from the list first")
+            return
+        if self.current_roi_key not in self.CAPTURABLE_ROIS:
+            messagebox.showinfo("Info", "This ROI is not associated with a template image.")
+            return
+
+        roi = self.config["roi"].get(self.current_roi_key, {})
+        if roi.get("w", 0) <= 5 or roi.get("h", 0) <= 5:
+            messagebox.showwarning("Warning", "ROI is too small. Set the region first.")
+            return
+
+        # Minimize window, capture live, restore
+        self.withdraw()
+        self.update()
+        import time
+        time.sleep(0.5)
+
+        with mss.mss() as sct:
+            monitor = {
+                "left": roi["x"], "top": roi["y"],
+                "width": roi["w"], "height": roi["h"],
+            }
+            grab = sct.grab(monitor)
+            cropped = Image.frombytes("RGB", grab.size, grab.rgb)
+
+        self.deiconify()
+        self._save_captured_image(cropped)
+
+    def _save_captured_image(self, image):
+        """Save a captured PIL image as the template for the current ROI key."""
+        # Map ROI key to image config key (some differ)
+        image_key_map = {
+            "item_slot": "item_icon",
+            "scarecrow_search": "scarecrow",
+            "level_display": "level_up_effect",
+            "exit_button": "exit_button",
+            "delete_button": "exit_button",
+            "delete_popup": "delete_popup",
+        }
+        image_key = image_key_map.get(self.current_roi_key, self.current_roi_key)
+
+        dest = os.path.join(self.images_dir, f"{image_key}.png")
+        image.save(dest)
+        self.config.setdefault("images", {})[image_key] = dest
+
+        self.capture_preview_label.config(
+            text=f"Saved: {image_key}.png ({image.width}x{image.height})"
+        )
+        self.status_var.set(
+            f"ROI '{self.current_roi_key}' captured as template image -> {dest}"
+        )
 
 
 class ClickPositionEditor(tk.Toplevel):

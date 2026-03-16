@@ -1,0 +1,834 @@
+"""Main automation workflow engine for Lineage Classic bot."""
+import math
+import os
+import time
+import logging
+import threading
+from datetime import datetime
+
+from core.image_recognition import ImageRecognition
+from core.input_handler import create_input_handler
+from core.telegram_notifier import TelegramNotifier
+from core.stats import StatsTracker
+
+logger = logging.getLogger(__name__)
+
+
+class AutomationEngine:
+    """Executes the full Lineage Classic automation workflow.
+
+    Workflow steps:
+    1)  Character select screen: double-click empty slot
+    2)  Character creation screen: click knight icon
+    3)  Verify knight image at position, retry if wrong
+    4)  Click name input position, type character name
+    5)  Click confirm button to create character
+    6)  Auto-return to select screen: double-click character slot to enter game
+    7)  Press tab, double-click item icon
+    8)  Left popup appears: click specific text in popup
+    9)  After configurable delay, click point then find & click scarecrow repeatedly
+    10) After each scarecrow click, check level-up (image/OCR). Check MP at each level:
+        - Level 2, MP 3: continue scarecrow, then go to step 14
+        - Level 3, MP 5: continue; else go to step 11
+        - Level 4, MP 7: continue; else go to step 11
+        - Level 5, MP 9: SUCCESS -> telegram notify & stop; else go to step 11
+    11) Ctrl+Q, click exit confirm to return to character select
+    12) Select character, click delete, wait for delete popup
+    13) After delete popup disappears, go to step 1
+    14) MP check at higher levels (handled in step 10 logic)
+    """
+
+    # Workflow states
+    STATE_IDLE = "idle"
+    STATE_RUNNING = "running"
+    STATE_PAUSED = "paused"
+    STATE_STOPPED = "stopped"
+    STATE_SUCCESS = "success"
+
+    def __init__(self, config, log_callback=None):
+        self.config = config
+        self.log_callback = log_callback
+        self.state = self.STATE_IDLE
+        self._stop_event = threading.Event()
+        self._pause_event = threading.Event()
+        self._pause_event.set()  # Not paused by default
+
+        self.recognizer = ImageRecognition()
+        self.input = None
+        self.telegram = TelegramNotifier(
+            config.get("telegram_bot_token", ""),
+            config.get("telegram_chat_id", ""),
+        )
+        self.iteration_count = 0
+        self.current_step = 0
+        self.stats = StatsTracker()
+
+        # Error screenshot directory
+        self._error_ss_dir = config.get("error_screenshot_dir", "error_screenshots")
+        os.makedirs(self._error_ss_dir, exist_ok=True)
+
+        # OCR retry count
+        self._ocr_retries = config.get("ocr_retry_count", 3)
+
+        # Step retry settings
+        step_retry = config.get("step_retry", {})
+        self._step_max_retries = step_retry.get("max_retries", 3)
+        self._step_retry_delay = step_retry.get("retry_delay", 2)
+
+    def _log(self, msg, level="info"):
+        logger.log(getattr(logging, level.upper(), logging.INFO), msg)
+        if self.log_callback:
+            self.log_callback(msg)
+
+    def _check_stop(self):
+        """Check if stop was requested. Raises StopIteration if so."""
+        if self._stop_event.is_set():
+            raise StopIteration("Automation stopped by user")
+
+    def _wait_pause(self):
+        """Block while paused."""
+        while not self._pause_event.is_set():
+            if self._stop_event.is_set():
+                raise StopIteration("Automation stopped by user")
+            time.sleep(0.1)
+
+    def _sleep(self, seconds):
+        """Interruptible sleep."""
+        end = time.time() + seconds
+        while time.time() < end:
+            self._check_stop()
+            self._wait_pause()
+            remaining = end - time.time()
+            if remaining <= 0:
+                break
+            time.sleep(min(0.1, remaining))
+
+    def _wait_and_find(self, image_key, region_key, timeout=10, interval=0.5):
+        """Wait for a template image to appear in a region.
+        Returns (found, abs_x, abs_y).
+        """
+        template_path = self.config["images"].get(image_key, "")
+        region = self.config["roi"].get(region_key)
+        if not template_path:
+            self._log(f"Warning: No image set for '{image_key}'", "warning")
+            return False, 0, 0
+
+        end_time = time.time() + timeout
+        while time.time() < end_time:
+            self._check_stop()
+            self._wait_pause()
+            found, ax, ay, conf = self.recognizer.find_template_in_region(
+                template_path, region
+            )
+            if found:
+                return True, ax, ay
+            time.sleep(interval)
+        return False, 0, 0
+
+    def _ocr_number_retry(self, region, retries=None):
+        """OCR a number with retries for reliability.
+        Returns int or None.
+        """
+        retries = retries or self._ocr_retries
+        for attempt in range(retries):
+            result = self.recognizer.ocr_number(region)
+            if result is not None:
+                return result
+            if attempt < retries - 1:
+                time.sleep(0.3)
+        return None
+
+    def _save_error_screenshot(self, step_name):
+        """Save a screenshot when an error occurs for debugging."""
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"error_{step_name}_{timestamp}.png"
+            filepath = os.path.join(self._error_ss_dir, filename)
+            self.recognizer.save_region_as_template(None, filepath)
+            self._log(f"Error screenshot saved: {filepath}")
+            return filepath
+        except Exception as e:
+            self._log(f"Failed to save error screenshot: {e}", "error")
+            return None
+
+    def _run_step_with_retry(self, step_func, step_name, max_retries=None):
+        """Run a step function with retry logic.
+        step_func should return (success, *results).
+        Returns the step_func result on success, or None on all retries exhausted.
+        """
+        max_retries = max_retries or self._step_max_retries
+        for attempt in range(max_retries):
+            self._check_stop()
+            self._wait_pause()
+            result = step_func()
+            if result[0]:  # success
+                return result
+            if attempt < max_retries - 1:
+                self._log(f"Step '{step_name}' failed (attempt {attempt + 1}/{max_retries}), "
+                          f"retrying in {self._step_retry_delay}s...", "warning")
+                self._sleep(self._step_retry_delay)
+            else:
+                self._log(f"Step '{step_name}' failed after {max_retries} attempts", "error")
+                self._save_error_screenshot(step_name)
+        return None
+
+    def start(self):
+        """Start automation in a new thread."""
+        if self.state == self.STATE_RUNNING:
+            self._log("Already running")
+            return
+        self._stop_event.clear()
+        self._pause_event.set()
+        self.state = self.STATE_RUNNING
+        thread = threading.Thread(target=self._run_loop, daemon=True)
+        thread.start()
+
+    def pause(self):
+        if self.state == self.STATE_RUNNING:
+            self._pause_event.clear()
+            self.state = self.STATE_PAUSED
+            self._log("Paused")
+
+    def resume(self):
+        if self.state == self.STATE_PAUSED:
+            self._pause_event.set()
+            self.state = self.STATE_RUNNING
+            self._log("Resumed")
+
+    def stop(self):
+        self._stop_event.set()
+        self._pause_event.set()  # Unblock if paused
+        self.state = self.STATE_STOPPED
+        self._log("Stop requested")
+
+    def _init_input(self):
+        """Initialize the input handler based on config."""
+        method = self.config.get("input_method", "software")
+        port = self.config.get("arduino_port", "COM3")
+        baudrate = self.config.get("arduino_baudrate", 9600)
+        korean_method = self.config.get("korean_input_method", "clipboard")
+        self.input = create_input_handler(method, port, baudrate, korean_method)
+        self._log(f"Input method: {method}")
+
+    def _run_loop(self):
+        """Main automation loop."""
+        self.stats.reset()
+        self.stats.start()
+        try:
+            self._init_input()
+            while not self._stop_event.is_set():
+                self.iteration_count += 1
+                self.stats.record_iteration()
+                self._log(f"=== Iteration {self.iteration_count} "
+                          f"[{self.stats.elapsed_str()}] ===")
+                result = self._run_single_cycle()
+                if result == "success":
+                    self.state = self.STATE_SUCCESS
+                    self.stats.record_success()
+                    self._log("SUCCESS! MP 9 at Level 5 found!")
+                    self._log(f"Stats: {self.stats.total_iterations} iterations, "
+                              f"{self.stats.elapsed_str()} elapsed")
+                    self.telegram.send_message(
+                        f"Lineage Bot: SUCCESS! Found MP 9 at Level 5. "
+                        f"Iteration: {self.iteration_count}, "
+                        f"Time: {self.stats.elapsed_str()}"
+                    )
+                    break
+                elif result == "delete_and_retry":
+                    self._log("Character doesn't meet criteria, deleting and retrying...")
+                    continue
+                elif result == "error":
+                    self.stats.record_error()
+                    self._log("Cycle ended with error, retrying...")
+                    self._sleep(2)
+                    continue
+                else:
+                    self._log(f"Cycle ended with result: {result}")
+        except StopIteration:
+            self._log("Automation stopped by user")
+        except Exception as e:
+            self._log(f"Error: {e}", "error")
+            self._save_error_screenshot("unexpected")
+            logger.exception("Automation error")
+        finally:
+            if self.input:
+                self.input.close()
+            # Save stats on finish
+            try:
+                self.stats.save_to_file("stats.txt")
+                self.stats.append_to_file("stats_log.txt")
+                self._log("Statistics saved to stats.txt and stats_log.txt")
+            except Exception as e:
+                self._log(f"Failed to save stats: {e}", "error")
+            if self.state != self.STATE_SUCCESS:
+                self.state = self.STATE_STOPPED
+            self._log("Automation finished")
+
+    def _run_single_cycle(self):
+        """Run one complete character creation + testing cycle.
+        Returns: 'success', 'delete_and_retry', or 'error'.
+        """
+        # Step 1: Double-click empty slot
+        self.current_step = 1
+        self._log("Step 1: Finding empty slot...")
+        result = self._run_step_with_retry(
+            lambda: self._step_find_and_click("empty_slot", "empty_slot", double=True, timeout=15),
+            "find_empty_slot")
+        if result is None:
+            return "error"
+        self._sleep(1)
+
+        # Step 2: Click knight icon
+        self.current_step = 2
+        self._log("Step 2: Clicking knight icon...")
+        result = self._run_step_with_retry(
+            lambda: self._step_find_and_click("knight_icon", "knight_icon", timeout=10),
+            "find_knight_icon")
+        if result is None:
+            return "error"
+        self._sleep(1)
+
+        # Step 3: Verify knight image, retry click if needed
+        self.current_step = 3
+        self._log("Step 3: Verifying knight selection...")
+        verify_pos = self.config["click_positions"]["knight_verify_click"]
+        for attempt in range(5):
+            self._check_stop()
+            self.input.click(verify_pos["x"], verify_pos["y"])
+            self._sleep(0.5)
+            template = self.config["images"].get("knight_verify", "")
+            region = self.config["roi"]["knight_verify"]
+            if template:
+                found, _, _, _ = self.recognizer.find_template_in_region(template, region)
+                if found:
+                    self._log("Knight verified!")
+                    break
+            else:
+                break  # No verification image, just proceed
+        self._sleep(0.5)
+
+        # Step 4: Click name input, type character name
+        self.current_step = 4
+        self._log("Step 4: Entering character name...")
+        self._check_stop()
+        name_pos = self.config["click_positions"]["name_input_click"]
+        self.input.click(name_pos["x"], name_pos["y"])
+        self._sleep(0.3)
+        char_name = self.config.get("character_name", "Knight001")
+        self.input.type_text(char_name)
+        self._sleep(0.5)
+
+        # Step 5: Click confirm to create character
+        self.current_step = 5
+        self._log("Step 5: Confirming character creation...")
+        result = self._run_step_with_retry(
+            lambda: self._step_find_and_click("confirm_button", "confirm_button", timeout=5),
+            "find_confirm_button")
+        if result is None:
+            return "error"
+        self._sleep(2)
+
+        # Step 6: Double-click character to enter game
+        self.current_step = 6
+        self._log("Step 6: Entering game...")
+        self._check_stop()
+        char_pos = self.config["click_positions"]["character_slot_click"]
+        self._sleep(1)
+        self.input.double_click(char_pos["x"], char_pos["y"])
+        wait_time = self.config.get("wait_after_enter_game", 5)
+        self._sleep(wait_time)
+
+        # Step 7: Press tab, double-click item
+        self.current_step = 7
+        self._log("Step 7: Opening inventory, clicking item...")
+        self._check_stop()
+        self.input.press_key("tab")
+        self._sleep(1)
+        result = self._run_step_with_retry(
+            lambda: self._step_find_and_click("item_icon", "item_slot", double=True, timeout=10),
+            "find_item_icon")
+        if result is None:
+            return "error"
+        self._sleep(1)
+
+        # Step 8: Click text in popup
+        self.current_step = 8
+        self._log("Step 8: Clicking popup text...")
+        result = self._run_step_with_retry(
+            lambda: self._step_find_and_click("popup_text", "popup_text", timeout=10),
+            "find_popup_text")
+        if result is None:
+            return "error"
+        self._sleep(1)
+
+        # Step 9: Wait, click point, then find & click scarecrow
+        self.current_step = 9
+        self._log("Step 9: Starting scarecrow clicking...")
+        self._check_stop()
+        scarecrow_delay = self.config.get("wait_before_scarecrow", 3)
+        self._sleep(scarecrow_delay)
+
+        # Click initial point after entering
+        after_pos = self.config["click_positions"]["after_enter_click"]
+        self.input.click(after_pos["x"], after_pos["y"])
+        self._sleep(1)
+
+        # Step 10: Scarecrow click loop with level/MP checking
+        self.current_step = 10
+        result = self._scarecrow_loop()
+        return result
+
+    def _step_find_and_click(self, image_key, region_key, double=False, timeout=10):
+        """Helper for step retry: find template and click.
+        Returns (True, x, y) or (False, 0, 0).
+        """
+        found, x, y = self._wait_and_find(image_key, region_key, timeout=timeout)
+        if found:
+            if double:
+                self.input.double_click(x, y)
+            else:
+                self.input.click(x, y)
+            return (True, x, y)
+        return (False, 0, 0)
+
+    def _capture_progress_snapshot(self, level_region, exp_region):
+        """Capture current level and EXP display image for change detection.
+        Returns (level_number_or_None, exp_image_bytes).
+        """
+        level = self.recognizer.ocr_number(level_region)
+        exp_img = None
+        if exp_region and exp_region.get("w", 0) > 5:
+            exp_img = self.recognizer.capture_screen(exp_region).tobytes()
+        return level, exp_img
+
+    def _check_death(self, death_template, revival_template, hp_region, use_color=True):
+        """Check if character has died (HP=0) and attempt recovery.
+        Returns True if death was detected and recovery attempted.
+        """
+        death_detected = False
+
+        # Method 1: Check for death screen image
+        if death_template:
+            screen = self.recognizer.capture_screen()
+            found, _, _, _ = self.recognizer.find_template(screen, death_template)
+            if found:
+                death_detected = True
+
+        # Method 2: HP bar color detection (fast and reliable)
+        if not death_detected and use_color and hp_region and hp_region.get("w", 0) > 5:
+            hp_info = self.recognizer.check_hp_bar(hp_region)
+            if hp_info["is_dead"]:
+                death_detected = True
+                self._log(f"HP bar empty (ratio={hp_info['hp_ratio']:.3f})", "warning")
+
+        # Method 3: Check HP display via OCR (HP = 0) as fallback
+        if not death_detected and not use_color and hp_region and hp_region.get("w", 0) > 5:
+            hp_val = self.recognizer.ocr_number(hp_region)
+            if hp_val is not None and hp_val == 0:
+                death_detected = True
+
+        if not death_detected:
+            return False
+
+        self._log("DEATH DETECTED! HP=0. Starting recovery...", "warning")
+
+        # Step 1: Click revival button / death screen image
+        if revival_template:
+            found, rx, ry = self._wait_and_find_by_path(revival_template, timeout=10)
+            if found:
+                self.input.click(rx, ry)
+                self._log("Clicked revival button")
+            else:
+                self._log("Revival button not found, clicking death screen...", "warning")
+                if death_template:
+                    screen = self.recognizer.capture_screen()
+                    found, dx, dy, _ = self.recognizer.find_template(screen, death_template)
+                    if found:
+                        self.input.click(dx, dy)
+        elif death_template:
+            screen = self.recognizer.capture_screen()
+            found, dx, dy, _ = self.recognizer.find_template(screen, death_template)
+            if found:
+                self.input.click(dx, dy)
+                self._log("Clicked death screen image")
+
+        self._sleep(2)
+
+        # Step 2: Press tab to open inventory
+        self.input.press_key("tab")
+        self._sleep(1)
+
+        # Step 3: Double-click item (same as step 7)
+        found, ix, iy = self._wait_and_find("item_icon", "item_slot", timeout=10)
+        if found:
+            self.input.double_click(ix, iy)
+            self._sleep(1)
+            self._log("Used recovery item after death")
+        else:
+            self._log("Item not found during death recovery!", "warning")
+
+        # Step 4: Click popup text (same as step 8)
+        found, px, py = self._wait_and_find("popup_text", "popup_text", timeout=10)
+        if found:
+            self.input.click(px, py)
+            self._sleep(1)
+
+        self._log("Death recovery complete. Resuming scarecrow clicking...")
+        return True
+
+    def _wait_and_find_by_path(self, template_path, timeout=10, interval=0.5):
+        """Wait for a template image (by path) to appear on full screen.
+        Returns (found, x, y).
+        """
+        end_time = time.time() + timeout
+        while time.time() < end_time:
+            self._check_stop()
+            self._wait_pause()
+            screen = self.recognizer.capture_screen()
+            found, x, y, _ = self.recognizer.find_template(screen, template_path)
+            if found:
+                return True, x, y
+            time.sleep(interval)
+        return False, 0, 0
+
+    def _generate_radial_positions(self, center_x, center_y, distance, count=8):
+        """Generate positions in 8 directions around a center point."""
+        positions = []
+        for i in range(count):
+            angle = (2 * math.pi * i) / count
+            x = int(center_x + distance * math.cos(angle))
+            y = int(center_y + distance * math.sin(angle))
+            positions.append({"x": x, "y": y})
+        return positions
+
+    def _scarecrow_loop(self):
+        """Click scarecrow repeatedly and check level/MP.
+        Returns 'success' or 'delete_and_retry'.
+        """
+        current_level = 1
+        click_delay = self.config.get("scarecrow_click_delay", 0.5)
+        level_check_method = self.config.get("level_check_method", "both")
+        level_up_template = self.config["images"].get("level_up_effect", "")
+        scarecrow_region = self.config["roi"]["scarecrow_search"]
+        level_region = self.config["roi"]["level_display"]
+        mp_region = self.config["roi"]["mp_display"]
+        # exp_display: check roi first, fallback to root-level for backward compat
+        exp_region = self.config["roi"].get("exp_display") or self.config.get("exp_display")
+        hp_region = self.config["roi"].get("hp_display")
+
+        # Death recovery settings
+        death_cfg = self.config.get("death_recovery", {})
+        death_enabled = death_cfg.get("enabled", True)
+        hp_check_interval = death_cfg.get("hp_check_interval", 2)
+        death_template = self.config["images"].get("death_screen", "")
+        revival_template = self.config["images"].get("revival_button", "")
+        hp_bar_cfg = self.config.get("hp_bar_detection", {})
+        hp_use_color = hp_bar_cfg.get("enabled", True) and hp_bar_cfg.get("method", "color") == "color"
+        last_death_check = time.time()
+
+        # Target lock settings
+        target_cfg = self.config.get("target_lock", {})
+        target_lock_enabled = target_cfg.get("enabled", True)
+        target_tolerance = target_cfg.get("position_tolerance", 30)
+        last_target_pos = None  # (x, y) of last clicked scarecrow
+
+        # Character center for distance-based sorting
+        char_center = self.config.get("character_center")
+        origin = char_center if char_center and char_center.get("x", 0) > 0 else None
+
+        # Build scarecrow template list (multi-direction)
+        scarecrow_templates = list(self.config.get("scarecrow_templates", []))
+        legacy = self.config["images"].get("scarecrow", "")
+        if legacy and legacy not in scarecrow_templates:
+            scarecrow_templates.insert(0, legacy)
+
+        # HSV color filter settings
+        hsv_cfg = self.config.get("scarecrow_hsv", {})
+        hsv_range = hsv_cfg if hsv_cfg.get("enabled") else None
+
+        features = []
+        if scarecrow_templates:
+            features.append(f"{len(scarecrow_templates)} templates")
+        if hsv_range:
+            features.append("HSV filter")
+        if origin:
+            features.append("distance sort")
+        if target_lock_enabled:
+            features.append("target lock")
+        if death_enabled:
+            features.append("death recovery")
+        if features:
+            self._log(f"Scarecrow detection: {' + '.join(features)}")
+        else:
+            self._log("Warning: No scarecrow templates or HSV filter configured!", "warning")
+
+        # Stuck detection settings
+        stuck_cfg = self.config.get("stuck_detection", {})
+        stuck_enabled = stuck_cfg.get("enabled", True)
+        stuck_timeout = stuck_cfg.get("timeout", 10)
+        unstuck_clicks = stuck_cfg.get("unstuck_clicks", [])
+        use_radial = stuck_cfg.get("use_radial_movement", False)
+        radial_distance = stuck_cfg.get("radial_distance", 100)
+        unstuck_idx = 0  # Rotate through unstuck click positions
+
+        # Generate radial positions if enabled and character center is set
+        if use_radial and origin:
+            radial_positions = self._generate_radial_positions(
+                origin["x"], origin["y"], radial_distance)
+            self._log(f"Radial unstuck: 8 directions, distance={radial_distance}px")
+        else:
+            radial_positions = None
+
+        # Track progress for stuck detection
+        last_progress_time = time.time()
+        last_level, last_exp_img = self._capture_progress_snapshot(level_region, exp_region)
+
+        # MP requirements per level
+        mp_requirements = {2: 3, 3: 5, 4: 7, 5: 9}
+
+        while not self._stop_event.is_set():
+            self._check_stop()
+            self._wait_pause()
+
+            # --- Death check ---
+            if death_enabled and (death_template or (hp_region and hp_region.get("w", 0) > 5)):
+                now = time.time()
+                if now - last_death_check >= hp_check_interval:
+                    last_death_check = now
+                    if self._check_death(death_template, revival_template, hp_region,
+                                         use_color=hp_use_color):
+                        self.stats.record_death()
+                        last_progress_time = time.time()
+                        last_target_pos = None
+                        continue
+
+            # --- Stuck detection: check if progress stalled ---
+            if stuck_enabled:
+                elapsed = time.time() - last_progress_time
+                if elapsed >= stuck_timeout:
+                    # Determine unstuck positions
+                    if radial_positions:
+                        positions_to_use = radial_positions
+                    elif unstuck_clicks:
+                        positions_to_use = unstuck_clicks
+                    else:
+                        positions_to_use = None
+
+                    if positions_to_use:
+                        self.stats.record_stuck()
+                        self._log(f"Stuck detected! No progress for {stuck_timeout}s. "
+                                  f"Clicking unstuck position #{unstuck_idx + 1}...", "warning")
+                        pos = positions_to_use[unstuck_idx % len(positions_to_use)]
+                        self.input.click(pos["x"], pos["y"])
+                        unstuck_idx += 1
+                        self._sleep(1)
+                        last_progress_time = time.time()
+                        last_target_pos = None  # Reset target lock after unstuck
+                        last_level, last_exp_img = self._capture_progress_snapshot(
+                            level_region, exp_region)
+                        continue
+
+            # --- Find and click scarecrow ---
+            scarecrow_clicked = False
+
+            # Target lock: try clicking last known target first
+            if target_lock_enabled and last_target_pos and (scarecrow_templates or hsv_range):
+                found, sx, sy, conf, idx = self.recognizer.find_scarecrow(
+                    scarecrow_region, scarecrow_templates, hsv_range,
+                    origin={"x": last_target_pos[0], "y": last_target_pos[1]},
+                )
+                if found:
+                    dist = abs(sx - last_target_pos[0]) + abs(sy - last_target_pos[1])
+                    if dist <= target_tolerance:
+                        self.input.click(sx, sy)
+                        last_target_pos = (sx, sy)
+                    else:
+                        self.input.click(sx, sy)
+                        last_target_pos = (sx, sy)
+                        self._log("Target moved, switched to nearest scarecrow", "debug")
+                    scarecrow_clicked = True
+                else:
+                    last_target_pos = None
+                    self._log("Target lost, searching for new scarecrow...", "debug")
+
+            # No target lock hit — search for closest scarecrow
+            if not scarecrow_clicked and (scarecrow_templates or hsv_range):
+                found, sx, sy, conf, idx = self.recognizer.find_scarecrow(
+                    scarecrow_region, scarecrow_templates, hsv_range,
+                    origin=origin,
+                )
+                if found:
+                    self.input.click(sx, sy)
+                    last_target_pos = (sx, sy) if target_lock_enabled else None
+                    scarecrow_clicked = True
+                    if idx >= 0:
+                        self._log(f"Scarecrow clicked (template #{idx+1}, conf={conf:.2f})",
+                                  "debug")
+                    else:
+                        self._log("Scarecrow clicked (HSV fallback)", "debug")
+                else:
+                    self._log("Scarecrow not found, retrying...", "warning")
+                    self._sleep(1)
+                    continue
+
+            if scarecrow_clicked:
+                self._sleep(click_delay)
+
+            # --- Check for progress (level or EXP change) ---
+            cur_level, cur_exp_img = self._capture_progress_snapshot(
+                level_region, exp_region)
+            progress_detected = False
+
+            if cur_level is not None and last_level is not None:
+                if cur_level > last_level:
+                    progress_detected = True
+            if cur_exp_img is not None and last_exp_img is not None:
+                if cur_exp_img != last_exp_img:
+                    progress_detected = True
+
+            if progress_detected:
+                last_progress_time = time.time()
+                last_level = cur_level
+                last_exp_img = cur_exp_img
+
+            # Check for level up
+            leveled_up = False
+
+            if level_check_method in ("image", "both") and level_up_template:
+                if self.recognizer.check_level_by_image(level_up_template):
+                    leveled_up = True
+
+            if level_check_method in ("ocr", "both"):
+                if cur_level is not None and cur_level > current_level:
+                    leveled_up = True
+                    current_level = cur_level
+
+            if leveled_up:
+                # Re-read level via OCR for accuracy (with retry)
+                ocr_level = self._ocr_number_retry(level_region)
+                if ocr_level is not None:
+                    current_level = ocr_level
+                else:
+                    current_level += 1
+
+                self._log(f"Level up detected! Current level: {current_level}")
+                self.stats.record_level_up(current_level, self.iteration_count)
+
+                # Check MP (with retry)
+                required_mp = mp_requirements.get(current_level)
+                if required_mp is None:
+                    # Level not in requirements, keep clicking
+                    continue
+
+                actual_mp = self._ocr_number_retry(mp_region)
+
+                if actual_mp is None:
+                    self._log(f"Level {current_level}: MP OCR failed! "
+                              "Retrying after short delay...", "warning")
+                    self._sleep(1)
+                    actual_mp = self._ocr_number_retry(mp_region)
+
+                if actual_mp is None:
+                    self._log(f"Level {current_level}: MP still unreadable. "
+                              "Skipping MP check, continuing scarecrow.", "warning")
+                    self._save_error_screenshot(f"mp_ocr_fail_lv{current_level}")
+                    continue
+
+                self._log(f"Level {current_level}: MP = {actual_mp} (need {required_mp})")
+
+                if current_level == 5:
+                    if actual_mp == 9:
+                        self.stats.record_mp_pass(current_level, actual_mp,
+                                                  self.iteration_count)
+                        return "success"
+                    else:
+                        self._log(f"Level 5 but MP={actual_mp}, not 9. Deleting character.")
+                        self.stats.record_mp_fail(current_level, actual_mp, 9,
+                                                  self.iteration_count)
+                        self._exit_and_delete()
+                        return "delete_and_retry"
+
+                if actual_mp != required_mp:
+                    self._log(
+                        f"Level {current_level} MP={actual_mp} != {required_mp}. "
+                        "Deleting character."
+                    )
+                    self.stats.record_mp_fail(current_level, actual_mp, required_mp,
+                                              self.iteration_count)
+                    self._exit_and_delete()
+                    return "delete_and_retry"
+
+                self.stats.record_mp_pass(current_level, actual_mp, self.iteration_count)
+                self._log(f"Level {current_level} MP={required_mp} OK, continuing...")
+                # Continue scarecrow clicking
+
+        return "stopped"
+
+    def _exit_and_delete(self):
+        """Steps 11-13: Exit game, delete character."""
+        # Step 11: Ctrl+Q to exit
+        self.current_step = 11
+        self._log("Step 11: Exiting game (Ctrl+Q)...")
+        self.input.hotkey("ctrl", "q")
+        self._sleep(1)
+
+        # Click exit confirm
+        exit_pos = self.config["click_positions"]["exit_confirm_click"]
+        found, x, y = self._wait_and_find("exit_button", "exit_button", timeout=5)
+        if found:
+            self.input.click(x, y)
+        else:
+            self.input.click(exit_pos["x"], exit_pos["y"])
+        self._sleep(3)
+
+        # Step 12: Select character and delete
+        self.current_step = 12
+        self._log("Step 12: Deleting character...")
+        char_pos = self.config["click_positions"]["character_slot_click"]
+        self.input.click(char_pos["x"], char_pos["y"])
+        self._sleep(0.5)
+
+        delete_pos = self.config["click_positions"]["delete_click"]
+        self.input.click(delete_pos["x"], delete_pos["y"])
+        self._sleep(1)
+
+        # Step 13: Wait for delete popup to appear and disappear
+        self.current_step = 13
+        self._log("Step 13: Waiting for delete confirmation...")
+        delete_wait = self.config.get("delete_wait_time", 10)
+
+        # Wait for popup to appear
+        delete_template = self.config["images"].get("delete_popup", "")
+        delete_region = self.config["roi"]["delete_popup"]
+        if delete_template:
+            # Wait for popup to appear
+            popup_appeared = False
+            for _ in range(int(delete_wait * 2)):
+                self._check_stop()
+                self._wait_pause()
+                found, _, _, _ = self.recognizer.find_template_in_region(
+                    delete_template, delete_region
+                )
+                if found:
+                    popup_appeared = True
+                    break
+                self._sleep(0.5)
+
+            if popup_appeared:
+                # Wait for popup to disappear
+                for _ in range(int(delete_wait * 4)):
+                    self._check_stop()
+                    self._wait_pause()
+                    found, _, _, _ = self.recognizer.find_template_in_region(
+                        delete_template, delete_region
+                    )
+                    if not found:
+                        self._log("Delete complete!")
+                        break
+                    self._sleep(0.5)
+        else:
+            # No delete popup image, just wait
+            self._sleep(delete_wait)
+
+        self._sleep(1)
+        self._log("Ready for next iteration")

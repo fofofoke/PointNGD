@@ -54,6 +54,12 @@ DEFAULT_CONFIG = {
         "exit_button": "",
         "delete_popup": "",
     },
+    "scarecrow_templates": [],
+    "scarecrow_hsv": {
+        "enabled": False,
+        "h_min": 10, "s_min": 50, "v_min": 50,
+        "h_max": 30, "s_max": 255, "v_max": 255,
+    },
 }
 
 CONFIG_FILE = "config.json"

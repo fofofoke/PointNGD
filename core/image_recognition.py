@@ -147,6 +147,140 @@ class ImageRecognition:
         cv2.imwrite(save_path, screen)
         return save_path
 
+    # --- Scarecrow multi-direction + HSV color detection ---
+
+    def find_scarecrow(self, region, templates, hsv_range=None, threshold=None):
+        """Find scarecrow using HSV color filter + multi-template matching.
+
+        Args:
+            region: ROI dict {x, y, w, h} to search in.
+            templates: List of template image paths (different directions).
+            hsv_range: Optional dict {"h_min","s_min","v_min","h_max","s_max","v_max"}
+                       for HSV color pre-filtering.
+            threshold: Match confidence threshold.
+
+        Returns:
+            (found, abs_x, abs_y, best_confidence, matched_template_index)
+        """
+        threshold = threshold or self.match_threshold
+        screen = self.capture_screen(region)
+
+        # Phase 1: HSV color filtering to create candidate mask
+        hsv_mask = None
+        if hsv_range:
+            hsv_mask = self._create_hsv_mask(screen, hsv_range)
+            # If no pixels match the color at all, skip template matching
+            if cv2.countNonZero(hsv_mask) < 50:
+                return False, 0, 0, 0, -1
+
+        # Phase 2: Try each template, pick the best match
+        best_found = False
+        best_x, best_y = 0, 0
+        best_conf = 0.0
+        best_idx = -1
+
+        for idx, tmpl_path in enumerate(templates):
+            if not tmpl_path or not os.path.exists(tmpl_path):
+                continue
+            template = cv2.imread(tmpl_path, cv2.IMREAD_COLOR)
+            if template is None:
+                continue
+
+            search_img = screen
+            if hsv_mask is not None:
+                # Apply mask: black out areas that don't match the color
+                search_img = cv2.bitwise_and(screen, screen, mask=hsv_mask)
+
+            result = cv2.matchTemplate(search_img, template, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, max_loc = cv2.minMaxLoc(result)
+
+            if max_val > best_conf:
+                best_conf = max_val
+                h, w = template.shape[:2]
+                best_x = max_loc[0] + w // 2
+                best_y = max_loc[1] + h // 2
+                best_idx = idx
+
+        if best_conf >= threshold:
+            abs_x = region["x"] + best_x
+            abs_y = region["y"] + best_y
+            return True, abs_x, abs_y, best_conf, best_idx
+
+        # Phase 3: Fallback - if templates fail, use HSV centroid
+        if hsv_mask is not None:
+            found, cx, cy = self._find_hsv_centroid(hsv_mask, min_area=100)
+            if found:
+                abs_x = region["x"] + cx
+                abs_y = region["y"] + cy
+                return True, abs_x, abs_y, 0.5, -1  # lower confidence
+
+        return False, 0, 0, best_conf, best_idx
+
+    def _create_hsv_mask(self, bgr_img, hsv_range):
+        """Create a binary mask from HSV color range."""
+        hsv = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2HSV)
+        lower = np.array([
+            hsv_range.get("h_min", 0),
+            hsv_range.get("s_min", 0),
+            hsv_range.get("v_min", 0),
+        ])
+        upper = np.array([
+            hsv_range.get("h_max", 180),
+            hsv_range.get("s_max", 255),
+            hsv_range.get("v_max", 255),
+        ])
+        mask = cv2.inRange(hsv, lower, upper)
+        # Clean up noise
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+        return mask
+
+    def _find_hsv_centroid(self, mask, min_area=100):
+        """Find the centroid of the largest contour in a binary mask.
+        Returns (found, center_x, center_y).
+        """
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return False, 0, 0
+
+        largest = max(contours, key=cv2.contourArea)
+        if cv2.contourArea(largest) < min_area:
+            return False, 0, 0
+
+        M = cv2.moments(largest)
+        if M["m00"] == 0:
+            return False, 0, 0
+
+        cx = int(M["m10"] / M["m00"])
+        cy = int(M["m01"] / M["m00"])
+        return True, cx, cy
+
+    def sample_hsv_from_region(self, region):
+        """Capture a region and return the median HSV values + suggested range.
+        Useful for GUI to help user pick HSV range for scarecrow color.
+        Returns dict with h_median, s_median, v_median and suggested min/max.
+        """
+        screen = self.capture_screen(region)
+        hsv = cv2.cvtColor(screen, cv2.COLOR_BGR2HSV)
+        h_med = int(np.median(hsv[:, :, 0]))
+        s_med = int(np.median(hsv[:, :, 1]))
+        v_med = int(np.median(hsv[:, :, 2]))
+        return {
+            "h_median": h_med, "s_median": s_med, "v_median": v_med,
+            "h_min": max(0, h_med - 15), "h_max": min(180, h_med + 15),
+            "s_min": max(0, s_med - 50), "s_max": min(255, s_med + 50),
+            "v_min": max(0, v_med - 50), "v_max": min(255, v_med + 50),
+        }
+
+    def preview_hsv_mask(self, region, hsv_range):
+        """Capture region, apply HSV filter, return masked image as PIL for preview."""
+        screen = self.capture_screen(region)
+        mask = self._create_hsv_mask(screen, hsv_range)
+        masked = cv2.bitwise_and(screen, screen, mask=mask)
+        rgb = cv2.cvtColor(masked, cv2.COLOR_BGR2RGB)
+        return Image.fromarray(rgb), cv2.countNonZero(mask)
+
     def compare_images(self, img1_path, img2_path):
         """Compare two images and return similarity score (0-1)."""
         img1 = cv2.imread(img1_path)

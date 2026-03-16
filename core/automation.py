@@ -301,11 +301,29 @@ class AutomationEngine:
         current_level = 1
         click_delay = self.config.get("scarecrow_click_delay", 0.5)
         level_check_method = self.config.get("level_check_method", "both")
-        scarecrow_template = self.config["images"].get("scarecrow", "")
         level_up_template = self.config["images"].get("level_up_effect", "")
         scarecrow_region = self.config["roi"]["scarecrow_search"]
         level_region = self.config["roi"]["level_display"]
         mp_region = self.config["roi"]["mp_display"]
+
+        # Build scarecrow template list (multi-direction)
+        scarecrow_templates = list(self.config.get("scarecrow_templates", []))
+        # Include legacy single scarecrow image if set
+        legacy = self.config["images"].get("scarecrow", "")
+        if legacy and legacy not in scarecrow_templates:
+            scarecrow_templates.insert(0, legacy)
+
+        # HSV color filter settings
+        hsv_cfg = self.config.get("scarecrow_hsv", {})
+        hsv_range = hsv_cfg if hsv_cfg.get("enabled") else None
+
+        if scarecrow_templates:
+            self._log(f"Scarecrow detection: {len(scarecrow_templates)} templates"
+                      f"{' + HSV filter' if hsv_range else ''}")
+        elif hsv_range:
+            self._log("Scarecrow detection: HSV color filter only")
+        else:
+            self._log("Warning: No scarecrow templates or HSV filter configured!", "warning")
 
         # MP requirements per level
         mp_requirements = {2: 3, 3: 5, 4: 7, 5: 9}
@@ -314,13 +332,18 @@ class AutomationEngine:
             self._check_stop()
             self._wait_pause()
 
-            # Find and click scarecrow
-            if scarecrow_template:
-                found, sx, sy, _ = self.recognizer.find_template_in_region(
-                    scarecrow_template, scarecrow_region
+            # Find and click scarecrow using combined detection
+            if scarecrow_templates or hsv_range:
+                found, sx, sy, conf, idx = self.recognizer.find_scarecrow(
+                    scarecrow_region, scarecrow_templates, hsv_range
                 )
                 if found:
                     self.input.click(sx, sy)
+                    if idx >= 0:
+                        self._log(f"Scarecrow clicked (template #{idx+1}, conf={conf:.2f})",
+                                  "debug")
+                    else:
+                        self._log("Scarecrow clicked (HSV fallback)", "debug")
                 else:
                     self._log("Scarecrow not found, retrying...", "warning")
                     self._sleep(1)

@@ -10,6 +10,7 @@ from core.automation import AutomationEngine
 from core.telegram_notifier import TelegramNotifier
 from gui.roi_editor import ROIEditor, ClickPositionEditor
 from gui.image_manager import ImageManager
+from gui.scarecrow_editor import ScarecrowEditor
 
 
 class MainWindow:
@@ -50,6 +51,8 @@ class MainWindow:
         tools_menu.add_command(label="ROI Editor", command=self._open_roi_editor)
         tools_menu.add_command(label="Click Position Editor", command=self._open_click_editor)
         tools_menu.add_command(label="Image Manager", command=self._open_image_manager)
+        tools_menu.add_separator()
+        tools_menu.add_command(label="Scarecrow Detection Editor", command=self._open_scarecrow_editor)
         menubar.add_cascade(label="Tools", menu=tools_menu)
 
         # Notebook (tabs)
@@ -220,6 +223,8 @@ class MainWindow:
         ttk.Button(quick_frame, text="Open Image Manager", command=self._open_image_manager).pack(
             fill=tk.X, padx=10, pady=2
         )
+        ttk.Button(quick_frame, text="Scarecrow Detection Editor",
+                   command=self._open_scarecrow_editor).pack(fill=tk.X, padx=10, pady=2)
 
     def _build_control_tab(self, parent):
         # Control buttons
@@ -377,6 +382,13 @@ class MainWindow:
             save_config(self.config)
 
         ImageManager(self.root, self.config, on_save=on_save)
+
+    def _open_scarecrow_editor(self):
+        def on_save(cfg):
+            self.config.update(cfg)
+            save_config(self.config)
+
+        ScarecrowEditor(self.root, self.config, images_dir="images", on_save=on_save)
 
     def _test_telegram(self):
         token = self.tg_token_var.get()

@@ -149,15 +149,20 @@ class ImageRecognition:
 
     # --- Scarecrow multi-direction + HSV color detection ---
 
-    def find_scarecrow(self, region, templates, hsv_range=None, threshold=None):
+    def find_scarecrow(self, region, templates, hsv_range=None, threshold=None,
+                       origin=None):
         """Find scarecrow using HSV color filter + multi-template matching.
+
+        Matches are sorted by distance from origin (closest first).
+        If origin is None, the center of the region is used.
 
         Args:
             region: ROI dict {x, y, w, h} to search in.
             templates: List of template image paths (different directions).
-            hsv_range: Optional dict {"h_min","s_min","v_min","h_max","s_max","v_max"}
-                       for HSV color pre-filtering.
+            hsv_range: Optional dict for HSV color pre-filtering.
             threshold: Match confidence threshold.
+            origin: Optional dict {"x": int, "y": int} - reference point
+                    (e.g. character position). Matches are sorted closest first.
 
         Returns:
             (found, abs_x, abs_y, best_confidence, matched_template_index)
@@ -165,19 +170,23 @@ class ImageRecognition:
         threshold = threshold or self.match_threshold
         screen = self.capture_screen(region)
 
+        # Origin in region-local coordinates
+        if origin:
+            ox = origin["x"] - region["x"]
+            oy = origin["y"] - region["y"]
+        else:
+            ox = region["w"] // 2
+            oy = region["h"] // 2
+
         # Phase 1: HSV color filtering to create candidate mask
         hsv_mask = None
         if hsv_range:
             hsv_mask = self._create_hsv_mask(screen, hsv_range)
-            # If no pixels match the color at all, skip template matching
             if cv2.countNonZero(hsv_mask) < 50:
                 return False, 0, 0, 0, -1
 
-        # Phase 2: Try each template, pick the best match
-        best_found = False
-        best_x, best_y = 0, 0
-        best_conf = 0.0
-        best_idx = -1
+        # Phase 2: Collect ALL matches from all templates above threshold
+        all_matches = []  # (rel_x, rel_y, confidence, template_idx)
 
         for idx, tmpl_path in enumerate(templates):
             if not tmpl_path or not os.path.exists(tmpl_path):
@@ -188,33 +197,75 @@ class ImageRecognition:
 
             search_img = screen
             if hsv_mask is not None:
-                # Apply mask: black out areas that don't match the color
                 search_img = cv2.bitwise_and(screen, screen, mask=hsv_mask)
 
             result = cv2.matchTemplate(search_img, template, cv2.TM_CCOEFF_NORMED)
-            _, max_val, _, max_loc = cv2.minMaxLoc(result)
+            h, w = template.shape[:2]
 
-            if max_val > best_conf:
-                best_conf = max_val
-                h, w = template.shape[:2]
-                best_x = max_loc[0] + w // 2
-                best_y = max_loc[1] + h // 2
-                best_idx = idx
+            # Find all locations above threshold
+            locations = np.where(result >= threshold)
+            for pt in zip(*locations[::-1]):
+                cx = pt[0] + w // 2
+                cy = pt[1] + h // 2
+                conf = float(result[pt[1], pt[0]])
+                all_matches.append((cx, cy, conf, idx))
 
-        if best_conf >= threshold:
-            abs_x = region["x"] + best_x
-            abs_y = region["y"] + best_y
-            return True, abs_x, abs_y, best_conf, best_idx
+        # NMS: remove overlapping detections, keep higher confidence
+        filtered = []
+        for m in sorted(all_matches, key=lambda x: -x[2]):
+            overlap = False
+            for f in filtered:
+                if abs(m[0] - f[0]) < 30 and abs(m[1] - f[1]) < 30:
+                    overlap = True
+                    break
+            if not overlap:
+                filtered.append(m)
 
-        # Phase 3: Fallback - if templates fail, use HSV centroid
+        if filtered:
+            # Sort by distance from origin (closest first)
+            filtered.sort(key=lambda m: (m[0] - ox) ** 2 + (m[1] - oy) ** 2)
+
+            best = filtered[0]
+            abs_x = region["x"] + best[0]
+            abs_y = region["y"] + best[1]
+            return True, abs_x, abs_y, best[2], best[3]
+
+        # Phase 3: Fallback - if templates fail, use HSV centroids sorted by distance
         if hsv_mask is not None:
-            found, cx, cy = self._find_hsv_centroid(hsv_mask, min_area=100)
+            found, cx, cy = self._find_hsv_closest(hsv_mask, ox, oy, min_area=100)
             if found:
                 abs_x = region["x"] + cx
                 abs_y = region["y"] + cy
-                return True, abs_x, abs_y, 0.5, -1  # lower confidence
+                return True, abs_x, abs_y, 0.5, -1
 
-        return False, 0, 0, best_conf, best_idx
+        best_conf = max((m[2] for m in all_matches), default=0.0)
+        return False, 0, 0, best_conf, -1
+
+    def _find_hsv_closest(self, mask, origin_x, origin_y, min_area=100):
+        """Find the centroid of the contour closest to the origin point.
+        Returns (found, center_x, center_y).
+        """
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return False, 0, 0
+
+        candidates = []
+        for c in contours:
+            if cv2.contourArea(c) < min_area:
+                continue
+            M = cv2.moments(c)
+            if M["m00"] == 0:
+                continue
+            cx = int(M["m10"] / M["m00"])
+            cy = int(M["m01"] / M["m00"])
+            dist = (cx - origin_x) ** 2 + (cy - origin_y) ** 2
+            candidates.append((cx, cy, dist))
+
+        if not candidates:
+            return False, 0, 0
+
+        candidates.sort(key=lambda x: x[2])
+        return True, candidates[0][0], candidates[0][1]
 
     def _create_hsv_mask(self, bgr_img, hsv_range):
         """Create a binary mask from HSV color range."""

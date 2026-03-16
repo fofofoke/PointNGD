@@ -176,6 +176,31 @@ class MainWindow:
             setattr(self, var_name, var)
             ttk.Entry(row, textvariable=var, width=8).pack(side=tk.LEFT, padx=5)
 
+        # Stuck Detection
+        stuck_frame = ttk.LabelFrame(scroll_frame, text="Stuck Detection (Path Blocked)")
+        stuck_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        self.stuck_enabled_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(stuck_frame, text="Enable stuck detection",
+                        variable=self.stuck_enabled_var).pack(anchor=tk.W, padx=10, pady=2)
+
+        stuck_timeout_row = ttk.Frame(stuck_frame)
+        stuck_timeout_row.pack(fill=tk.X, padx=10, pady=2)
+        ttk.Label(stuck_timeout_row, text="Timeout (seconds):", width=25).pack(side=tk.LEFT)
+        self.stuck_timeout_var = tk.StringVar(value="10")
+        ttk.Entry(stuck_timeout_row, textvariable=self.stuck_timeout_var, width=8).pack(
+            side=tk.LEFT, padx=5)
+
+        ttk.Label(stuck_frame,
+                  text="Unstuck click positions (one per line, format: x,y):",
+                  ).pack(anchor=tk.W, padx=10, pady=2)
+        self.unstuck_text = tk.Text(stuck_frame, height=3, width=30, font=("Consolas", 10))
+        self.unstuck_text.pack(fill=tk.X, padx=10, pady=2)
+        ttk.Label(stuck_frame,
+                  text="If no EXP/level change for timeout seconds, clicks these\n"
+                  "positions in order to move the character, then retries scarecrow.",
+                  foreground="gray").pack(anchor=tk.W, padx=10, pady=2)
+
         # Level Check Method
         level_frame = ttk.LabelFrame(scroll_frame, text="Level Check Method")
         level_frame.pack(fill=tk.X, padx=10, pady=5)
@@ -317,6 +342,23 @@ class MainWindow:
             self.config["arduino_baudrate"] = 9600
         self.config["character_name"] = self.char_name_var.get()
         self.config["korean_input_method"] = self.korean_method_var.get()
+
+        # Stuck detection
+        unstuck_clicks = []
+        for line in self.unstuck_text.get("1.0", "end").strip().splitlines():
+            line = line.strip()
+            if "," in line:
+                parts = line.split(",")
+                try:
+                    unstuck_clicks.append({"x": int(parts[0].strip()), "y": int(parts[1].strip())})
+                except (ValueError, IndexError):
+                    pass
+        self.config["stuck_detection"] = {
+            "enabled": self.stuck_enabled_var.get(),
+            "timeout": float(self.stuck_timeout_var.get()) if self.stuck_timeout_var.get() else 10,
+            "unstuck_clicks": unstuck_clicks,
+        }
+
         self.config["telegram_bot_token"] = self.tg_token_var.get()
         self.config["telegram_chat_id"] = self.tg_chat_var.get()
         self.config["level_check_method"] = self.level_method_var.get()
@@ -344,6 +386,15 @@ class MainWindow:
         self.arduino_baud_var.set(str(self.config.get("arduino_baudrate", 9600)))
         self.char_name_var.set(self.config.get("character_name", "Knight001"))
         self.korean_method_var.set(self.config.get("korean_input_method", "clipboard"))
+
+        # Stuck detection
+        stuck = self.config.get("stuck_detection", {})
+        self.stuck_enabled_var.set(stuck.get("enabled", True))
+        self.stuck_timeout_var.set(str(stuck.get("timeout", 10)))
+        self.unstuck_text.delete("1.0", "end")
+        for pos in stuck.get("unstuck_clicks", []):
+            self.unstuck_text.insert("end", f"{pos['x']},{pos['y']}\n")
+
         self.tg_token_var.set(self.config.get("telegram_bot_token", ""))
         self.tg_chat_var.set(self.config.get("telegram_chat_id", ""))
         self.level_method_var.set(self.config.get("level_check_method", "both"))

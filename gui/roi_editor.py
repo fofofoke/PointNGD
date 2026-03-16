@@ -26,6 +26,7 @@ class ROIEditor(tk.Toplevel):
         "delete_button": "Delete Button Area",
         "delete_popup": "Delete Popup Area",
         "click_after_enter": "Click After Enter Game",
+        "exp_display": "EXP Display Area (Stuck Detection)",
     }
 
     # ROI keys that correspond to an image template in config["images"]
@@ -381,6 +382,7 @@ class ClickPositionEditor(tk.Toplevel):
         "after_enter_click": "After Enter Game Click Position",
         "exit_confirm_click": "Exit Confirm Click Position",
         "delete_click": "Delete Button Click Position",
+        "character_center": "Character Center (Screen Center)",
     }
 
     def __init__(self, parent, config, on_save=None):
@@ -404,11 +406,17 @@ class ClickPositionEditor(tk.Toplevel):
         scroll_frame = ttk.Frame(self)
         scroll_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
+        # Keys stored at config top-level instead of click_positions
+        self._toplevel_keys = {"character_center"}
+
         for key, label in self.POSITION_LABELS.items():
             frame = ttk.LabelFrame(scroll_frame, text=label)
             frame.pack(fill=tk.X, pady=3)
 
-            pos = self.config.get("click_positions", {}).get(key, {"x": 0, "y": 0})
+            if key in self._toplevel_keys:
+                pos = self.config.get(key, {"x": 0, "y": 0})
+            else:
+                pos = self.config.get("click_positions", {}).get(key, {"x": 0, "y": 0})
             x_var = tk.StringVar(value=str(pos.get("x", 0)))
             y_var = tk.StringVar(value=str(pos.get("y", 0)))
 
@@ -451,7 +459,10 @@ class ClickPositionEditor(tk.Toplevel):
             except ValueError:
                 messagebox.showerror("Error", f"Invalid coordinates for {key}")
                 return
-            self.config.setdefault("click_positions", {})[key] = {"x": x, "y": y}
+            if key in self._toplevel_keys:
+                self.config[key] = {"x": x, "y": y}
+            else:
+                self.config.setdefault("click_positions", {})[key] = {"x": x, "y": y}
 
         if self.on_save:
             self.on_save(self.config)

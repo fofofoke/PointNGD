@@ -54,6 +54,13 @@ DEFAULT_CONFIG = {
         "exit_button": "",
         "delete_popup": "",
     },
+    "stuck_detection": {
+        "enabled": True,
+        "timeout": 10,
+        "unstuck_clicks": [{"x": 0, "y": 0}],
+    },
+    "exp_display": {"x": 0, "y": 0, "w": 100, "h": 20},
+    "character_center": {"x": 0, "y": 0},
     "scarecrow_templates": [],
     "scarecrow_hsv": {
         "enabled": False,

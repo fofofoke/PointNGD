@@ -294,6 +294,16 @@ class AutomationEngine:
         result = self._scarecrow_loop()
         return result
 
+    def _capture_progress_snapshot(self, level_region, exp_region):
+        """Capture current level and EXP display image for change detection.
+        Returns (level_number_or_None, exp_image_bytes).
+        """
+        level = self.recognizer.ocr_number(level_region)
+        exp_img = None
+        if exp_region and exp_region.get("w", 0) > 5:
+            exp_img = self.recognizer.capture_screen(exp_region).tobytes()
+        return level, exp_img
+
     def _scarecrow_loop(self):
         """Click scarecrow repeatedly and check level/MP.
         Returns 'success' or 'delete_and_retry'.
@@ -305,10 +315,14 @@ class AutomationEngine:
         scarecrow_region = self.config["roi"]["scarecrow_search"]
         level_region = self.config["roi"]["level_display"]
         mp_region = self.config["roi"]["mp_display"]
+        exp_region = self.config.get("exp_display")
+
+        # Character center for distance-based sorting
+        char_center = self.config.get("character_center")
+        origin = char_center if char_center and char_center.get("x", 0) > 0 else None
 
         # Build scarecrow template list (multi-direction)
         scarecrow_templates = list(self.config.get("scarecrow_templates", []))
-        # Include legacy single scarecrow image if set
         legacy = self.config["images"].get("scarecrow", "")
         if legacy and legacy not in scarecrow_templates:
             scarecrow_templates.insert(0, legacy)
@@ -319,11 +333,23 @@ class AutomationEngine:
 
         if scarecrow_templates:
             self._log(f"Scarecrow detection: {len(scarecrow_templates)} templates"
-                      f"{' + HSV filter' if hsv_range else ''}")
+                      f"{' + HSV filter' if hsv_range else ''}"
+                      f"{' + distance sort' if origin else ''}")
         elif hsv_range:
             self._log("Scarecrow detection: HSV color filter only")
         else:
             self._log("Warning: No scarecrow templates or HSV filter configured!", "warning")
+
+        # Stuck detection settings
+        stuck_cfg = self.config.get("stuck_detection", {})
+        stuck_enabled = stuck_cfg.get("enabled", True)
+        stuck_timeout = stuck_cfg.get("timeout", 10)
+        unstuck_clicks = stuck_cfg.get("unstuck_clicks", [])
+        unstuck_idx = 0  # Rotate through unstuck click positions
+
+        # Track progress for stuck detection
+        last_progress_time = time.time()
+        last_level, last_exp_img = self._capture_progress_snapshot(level_region, exp_region)
 
         # MP requirements per level
         mp_requirements = {2: 3, 3: 5, 4: 7, 5: 9}
@@ -332,10 +358,26 @@ class AutomationEngine:
             self._check_stop()
             self._wait_pause()
 
-            # Find and click scarecrow using combined detection
+            # --- Stuck detection: check if progress stalled ---
+            if stuck_enabled and unstuck_clicks:
+                elapsed = time.time() - last_progress_time
+                if elapsed >= stuck_timeout:
+                    self._log(f"Stuck detected! No progress for {stuck_timeout}s. "
+                              "Clicking unstuck position...", "warning")
+                    pos = unstuck_clicks[unstuck_idx % len(unstuck_clicks)]
+                    self.input.click(pos["x"], pos["y"])
+                    unstuck_idx += 1
+                    self._sleep(1)
+                    last_progress_time = time.time()
+                    last_level, last_exp_img = self._capture_progress_snapshot(
+                        level_region, exp_region)
+                    continue
+
+            # Find and click scarecrow (closest to character first)
             if scarecrow_templates or hsv_range:
                 found, sx, sy, conf, idx = self.recognizer.find_scarecrow(
-                    scarecrow_region, scarecrow_templates, hsv_range
+                    scarecrow_region, scarecrow_templates, hsv_range,
+                    origin=origin,
                 )
                 if found:
                     self.input.click(sx, sy)
@@ -350,6 +392,23 @@ class AutomationEngine:
                     continue
             self._sleep(click_delay)
 
+            # --- Check for progress (level or EXP change) ---
+            cur_level, cur_exp_img = self._capture_progress_snapshot(
+                level_region, exp_region)
+            progress_detected = False
+
+            if cur_level is not None and last_level is not None:
+                if cur_level > last_level:
+                    progress_detected = True
+            if cur_exp_img is not None and last_exp_img is not None:
+                if cur_exp_img != last_exp_img:
+                    progress_detected = True
+
+            if progress_detected:
+                last_progress_time = time.time()
+                last_level = cur_level
+                last_exp_img = cur_exp_img
+
             # Check for level up
             leveled_up = False
 
@@ -358,10 +417,9 @@ class AutomationEngine:
                     leveled_up = True
 
             if level_check_method in ("ocr", "both"):
-                detected_level = self.recognizer.ocr_number(level_region)
-                if detected_level is not None and detected_level > current_level:
+                if cur_level is not None and cur_level > current_level:
                     leveled_up = True
-                    current_level = detected_level
+                    current_level = cur_level
 
             if leveled_up:
                 # Re-read level via OCR for accuracy

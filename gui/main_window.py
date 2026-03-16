@@ -715,8 +715,9 @@ class MainWindow:
     def _exclude_own_windows(self, windows):
         """Filter out the bot's own windows from the search results."""
         own_title = self.root.title()
+        exclude_prefixes = (own_title, "Window Capture Preview", "Select Target Window")
         return [(wid, wtitle) for wid, wtitle in windows
-                if wtitle != own_title]
+                if not wtitle.startswith(exclude_prefixes)]
 
     def _find_target_window(self):
         """Search for windows matching the title and display results."""
@@ -782,8 +783,14 @@ class MainWindow:
             messagebox.showerror("Error", "Failed to capture window.")
             return
 
-        # Show preview
-        preview = tk.Toplevel(self.root)
+        # Show preview (reuse existing window if open)
+        if hasattr(self, '_capture_preview') and self._capture_preview.winfo_exists():
+            preview = self._capture_preview
+            for w in preview.winfo_children():
+                w.destroy()
+        else:
+            preview = tk.Toplevel(self.root)
+            self._capture_preview = preview
         preview.title(f"Window Capture Preview ({rect['w']}x{rect['h']})")
         from PIL import Image as PILImage, ImageTk
         max_w, max_h = 800, 600

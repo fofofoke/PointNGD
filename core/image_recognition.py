@@ -1,7 +1,10 @@
 """Image recognition engine: template matching, OCR, and screen capture."""
 import cv2
 import numpy as np
-from PIL import Image
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
 import mss
 import os
 
@@ -39,6 +42,8 @@ class ImageRecognition:
 
     def capture_screen_pil(self, region=None):
         """Capture screen and return as PIL Image."""
+        if Image is None:
+            raise ImportError("Pillow is required: pip install Pillow")
         bgr = self.capture_screen(region)
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         return Image.fromarray(rgb)
@@ -326,6 +331,8 @@ class ImageRecognition:
 
     def preview_hsv_mask(self, region, hsv_range):
         """Capture region, apply HSV filter, return masked image as PIL for preview."""
+        if Image is None:
+            raise ImportError("Pillow is required: pip install Pillow")
         screen = self.capture_screen(region)
         mask = self._create_hsv_mask(screen, hsv_range)
         masked = cv2.bitwise_and(screen, screen, mask=mask)

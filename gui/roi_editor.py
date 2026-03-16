@@ -27,6 +27,7 @@ class ROIEditor(tk.Toplevel):
         "delete_popup": "Delete Popup Area",
         "click_after_enter": "Click After Enter Game",
         "exp_display": "EXP Display Area (Stuck Detection)",
+        "hp_display": "HP Display Area (Death Detection)",
     }
 
     # ROI keys that correspond to an image template in config["images"]

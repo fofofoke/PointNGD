@@ -196,9 +196,61 @@ class MainWindow:
                   ).pack(anchor=tk.W, padx=10, pady=2)
         self.unstuck_text = tk.Text(stuck_frame, height=3, width=30, font=("Consolas", 10))
         self.unstuck_text.pack(fill=tk.X, padx=10, pady=2)
+        self.radial_enabled_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(stuck_frame, text="Use radial movement (8 directions from character center)",
+                        variable=self.radial_enabled_var).pack(anchor=tk.W, padx=10, pady=2)
+
+        radial_dist_row = ttk.Frame(stuck_frame)
+        radial_dist_row.pack(fill=tk.X, padx=10, pady=2)
+        ttk.Label(radial_dist_row, text="Radial distance (px):", width=25).pack(side=tk.LEFT)
+        self.radial_distance_var = tk.StringVar(value="100")
+        ttk.Entry(radial_dist_row, textvariable=self.radial_distance_var, width=8).pack(
+            side=tk.LEFT, padx=5)
+
         ttk.Label(stuck_frame,
                   text="If no EXP/level change for timeout seconds, clicks these\n"
-                  "positions in order to move the character, then retries scarecrow.",
+                  "positions in order to move the character, then retries scarecrow.\n"
+                  "Radial mode auto-generates 8 direction positions around character center.",
+                  foreground="gray").pack(anchor=tk.W, padx=10, pady=2)
+
+        # Death Recovery
+        death_frame = ttk.LabelFrame(scroll_frame, text="Death Recovery (HP=0)")
+        death_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        self.death_enabled_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(death_frame, text="Enable death detection & auto-recovery",
+                        variable=self.death_enabled_var).pack(anchor=tk.W, padx=10, pady=2)
+
+        death_interval_row = ttk.Frame(death_frame)
+        death_interval_row.pack(fill=tk.X, padx=10, pady=2)
+        ttk.Label(death_interval_row, text="HP check interval (sec):", width=25).pack(side=tk.LEFT)
+        self.death_interval_var = tk.StringVar(value="2")
+        ttk.Entry(death_interval_row, textvariable=self.death_interval_var, width=8).pack(
+            side=tk.LEFT, padx=5)
+
+        ttk.Label(death_frame,
+                  text="When HP=0 detected: click revival image → Tab → use item → resume.\n"
+                  "Set 'Death Screen Image' and 'HP Display' ROI in their editors.",
+                  foreground="gray").pack(anchor=tk.W, padx=10, pady=2)
+
+        # Target Lock
+        target_frame = ttk.LabelFrame(scroll_frame, text="Target Lock")
+        target_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        self.target_lock_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(target_frame, text="Keep attacking same scarecrow until it disappears",
+                        variable=self.target_lock_var).pack(anchor=tk.W, padx=10, pady=2)
+
+        target_tol_row = ttk.Frame(target_frame)
+        target_tol_row.pack(fill=tk.X, padx=10, pady=2)
+        ttk.Label(target_tol_row, text="Position tolerance (px):", width=25).pack(side=tk.LEFT)
+        self.target_tolerance_var = tk.StringVar(value="30")
+        ttk.Entry(target_tol_row, textvariable=self.target_tolerance_var, width=8).pack(
+            side=tk.LEFT, padx=5)
+
+        ttk.Label(target_frame,
+                  text="Prefers last-clicked scarecrow if still visible within tolerance.\n"
+                  "Switches to nearest target only when current one disappears.",
                   foreground="gray").pack(anchor=tk.W, padx=10, pady=2)
 
         # Level Check Method
@@ -357,6 +409,18 @@ class MainWindow:
             "enabled": self.stuck_enabled_var.get(),
             "timeout": float(self.stuck_timeout_var.get()) if self.stuck_timeout_var.get() else 10,
             "unstuck_clicks": unstuck_clicks,
+            "use_radial_movement": self.radial_enabled_var.get(),
+            "radial_distance": int(self.radial_distance_var.get()) if self.radial_distance_var.get() else 100,
+        }
+
+        self.config["death_recovery"] = {
+            "enabled": self.death_enabled_var.get(),
+            "hp_check_interval": float(self.death_interval_var.get()) if self.death_interval_var.get() else 2,
+        }
+
+        self.config["target_lock"] = {
+            "enabled": self.target_lock_var.get(),
+            "position_tolerance": int(self.target_tolerance_var.get()) if self.target_tolerance_var.get() else 30,
         }
 
         self.config["telegram_bot_token"] = self.tg_token_var.get()
@@ -394,6 +458,20 @@ class MainWindow:
         self.unstuck_text.delete("1.0", "end")
         for pos in stuck.get("unstuck_clicks", []):
             self.unstuck_text.insert("end", f"{pos['x']},{pos['y']}\n")
+
+        # Radial movement
+        self.radial_enabled_var.set(stuck.get("use_radial_movement", False))
+        self.radial_distance_var.set(str(stuck.get("radial_distance", 100)))
+
+        # Death recovery
+        death = self.config.get("death_recovery", {})
+        self.death_enabled_var.set(death.get("enabled", True))
+        self.death_interval_var.set(str(death.get("hp_check_interval", 2)))
+
+        # Target lock
+        target = self.config.get("target_lock", {})
+        self.target_lock_var.set(target.get("enabled", True))
+        self.target_tolerance_var.set(str(target.get("position_tolerance", 30)))
 
         self.tg_token_var.set(self.config.get("telegram_bot_token", ""))
         self.tg_chat_var.set(self.config.get("telegram_chat_id", ""))

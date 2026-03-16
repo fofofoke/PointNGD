@@ -32,6 +32,7 @@ DEFAULT_CONFIG = {
         "delete_button": {"x": 0, "y": 0, "w": 100, "h": 100},
         "delete_popup": {"x": 0, "y": 0, "w": 200, "h": 100},
         "click_after_enter": {"x": 0, "y": 0, "w": 10, "h": 10},
+        "hp_display": {"x": 0, "y": 0, "w": 80, "h": 30},
     },
     "click_positions": {
         "knight_verify_click": {"x": 0, "y": 0},
@@ -53,11 +54,23 @@ DEFAULT_CONFIG = {
         "level_up_effect": "",
         "exit_button": "",
         "delete_popup": "",
+        "death_screen": "",
+        "revival_button": "",
     },
     "stuck_detection": {
         "enabled": True,
         "timeout": 10,
         "unstuck_clicks": [{"x": 0, "y": 0}],
+        "use_radial_movement": False,
+        "radial_distance": 100,
+    },
+    "death_recovery": {
+        "enabled": True,
+        "hp_check_interval": 2,
+    },
+    "target_lock": {
+        "enabled": True,
+        "position_tolerance": 30,
     },
     "exp_display": {"x": 0, "y": 0, "w": 100, "h": 20},
     "character_center": {"x": 0, "y": 0},

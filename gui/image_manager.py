@@ -21,6 +21,8 @@ class ImageManager(tk.Toplevel):
         "level_up_effect": "Level-Up Effect Image",
         "exit_button": "Exit Confirm Button",
         "delete_popup": "Delete Confirmation Popup",
+        "death_screen": "Death Screen Image (HP=0)",
+        "revival_button": "Revival Button Image",
     }
 
     def __init__(self, parent, config, images_dir="images", on_save=None):

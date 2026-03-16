@@ -1,4 +1,5 @@
 """Main automation workflow engine for Lineage Classic bot."""
+import math
 import time
 import logging
 import threading
@@ -304,6 +305,99 @@ class AutomationEngine:
             exp_img = self.recognizer.capture_screen(exp_region).tobytes()
         return level, exp_img
 
+    def _check_death(self, death_template, revival_template, hp_region):
+        """Check if character has died (HP=0) and attempt recovery.
+        Returns True if death was detected and recovery attempted.
+        """
+        death_detected = False
+
+        # Method 1: Check for death screen image
+        if death_template:
+            screen = self.recognizer.capture_screen()
+            found, _, _, _ = self.recognizer.find_template(screen, death_template)
+            if found:
+                death_detected = True
+
+        # Method 2: Check HP display via OCR (HP = 0)
+        if not death_detected and hp_region and hp_region.get("w", 0) > 5:
+            hp_val = self.recognizer.ocr_number(hp_region)
+            if hp_val is not None and hp_val == 0:
+                death_detected = True
+
+        if not death_detected:
+            return False
+
+        self._log("DEATH DETECTED! HP=0. Starting recovery...", "warning")
+
+        # Step 1: Click revival button / death screen image
+        if revival_template:
+            found, rx, ry = self._wait_and_find_by_path(revival_template, timeout=10)
+            if found:
+                self.input.click(rx, ry)
+                self._log("Clicked revival button")
+            else:
+                self._log("Revival button not found, clicking death screen...", "warning")
+                if death_template:
+                    screen = self.recognizer.capture_screen()
+                    found, dx, dy, _ = self.recognizer.find_template(screen, death_template)
+                    if found:
+                        self.input.click(dx, dy)
+        elif death_template:
+            screen = self.recognizer.capture_screen()
+            found, dx, dy, _ = self.recognizer.find_template(screen, death_template)
+            if found:
+                self.input.click(dx, dy)
+                self._log("Clicked death screen image")
+
+        self._sleep(2)
+
+        # Step 2: Press tab to open inventory
+        self.input.press_key("tab")
+        self._sleep(1)
+
+        # Step 3: Double-click item (same as step 7)
+        found, ix, iy = self._wait_and_find("item_icon", "item_slot", timeout=10)
+        if found:
+            self.input.double_click(ix, iy)
+            self._sleep(1)
+            self._log("Used recovery item after death")
+        else:
+            self._log("Item not found during death recovery!", "warning")
+
+        # Step 4: Click popup text (same as step 8)
+        found, px, py = self._wait_and_find("popup_text", "popup_text", timeout=10)
+        if found:
+            self.input.click(px, py)
+            self._sleep(1)
+
+        self._log("Death recovery complete. Resuming scarecrow clicking...")
+        return True
+
+    def _wait_and_find_by_path(self, template_path, timeout=10, interval=0.5):
+        """Wait for a template image (by path) to appear on full screen.
+        Returns (found, x, y).
+        """
+        end_time = time.time() + timeout
+        while time.time() < end_time:
+            self._check_stop()
+            self._wait_pause()
+            screen = self.recognizer.capture_screen()
+            found, x, y, _ = self.recognizer.find_template(screen, template_path)
+            if found:
+                return True, x, y
+            time.sleep(interval)
+        return False, 0, 0
+
+    def _generate_radial_positions(self, center_x, center_y, distance, count=8):
+        """Generate positions in 8 directions around a center point."""
+        positions = []
+        for i in range(count):
+            angle = (2 * math.pi * i) / count
+            x = int(center_x + distance * math.cos(angle))
+            y = int(center_y + distance * math.sin(angle))
+            positions.append({"x": x, "y": y})
+        return positions
+
     def _scarecrow_loop(self):
         """Click scarecrow repeatedly and check level/MP.
         Returns 'success' or 'delete_and_retry'.
@@ -316,6 +410,21 @@ class AutomationEngine:
         level_region = self.config["roi"]["level_display"]
         mp_region = self.config["roi"]["mp_display"]
         exp_region = self.config.get("exp_display")
+        hp_region = self.config["roi"].get("hp_display")
+
+        # Death recovery settings
+        death_cfg = self.config.get("death_recovery", {})
+        death_enabled = death_cfg.get("enabled", True)
+        hp_check_interval = death_cfg.get("hp_check_interval", 2)
+        death_template = self.config["images"].get("death_screen", "")
+        revival_template = self.config["images"].get("revival_button", "")
+        last_death_check = time.time()
+
+        # Target lock settings
+        target_cfg = self.config.get("target_lock", {})
+        target_lock_enabled = target_cfg.get("enabled", True)
+        target_tolerance = target_cfg.get("position_tolerance", 30)
+        last_target_pos = None  # (x, y) of last clicked scarecrow
 
         # Character center for distance-based sorting
         char_center = self.config.get("character_center")
@@ -331,12 +440,19 @@ class AutomationEngine:
         hsv_cfg = self.config.get("scarecrow_hsv", {})
         hsv_range = hsv_cfg if hsv_cfg.get("enabled") else None
 
+        features = []
         if scarecrow_templates:
-            self._log(f"Scarecrow detection: {len(scarecrow_templates)} templates"
-                      f"{' + HSV filter' if hsv_range else ''}"
-                      f"{' + distance sort' if origin else ''}")
-        elif hsv_range:
-            self._log("Scarecrow detection: HSV color filter only")
+            features.append(f"{len(scarecrow_templates)} templates")
+        if hsv_range:
+            features.append("HSV filter")
+        if origin:
+            features.append("distance sort")
+        if target_lock_enabled:
+            features.append("target lock")
+        if death_enabled:
+            features.append("death recovery")
+        if features:
+            self._log(f"Scarecrow detection: {' + '.join(features)}")
         else:
             self._log("Warning: No scarecrow templates or HSV filter configured!", "warning")
 
@@ -345,7 +461,17 @@ class AutomationEngine:
         stuck_enabled = stuck_cfg.get("enabled", True)
         stuck_timeout = stuck_cfg.get("timeout", 10)
         unstuck_clicks = stuck_cfg.get("unstuck_clicks", [])
+        use_radial = stuck_cfg.get("use_radial_movement", False)
+        radial_distance = stuck_cfg.get("radial_distance", 100)
         unstuck_idx = 0  # Rotate through unstuck click positions
+
+        # Generate radial positions if enabled and character center is set
+        if use_radial and origin:
+            radial_positions = self._generate_radial_positions(
+                origin["x"], origin["y"], radial_distance)
+            self._log(f"Radial unstuck: 8 directions, distance={radial_distance}px")
+        else:
+            radial_positions = None
 
         # Track progress for stuck detection
         last_progress_time = time.time()
@@ -358,29 +484,76 @@ class AutomationEngine:
             self._check_stop()
             self._wait_pause()
 
+            # --- Death check ---
+            if death_enabled and (death_template or (hp_region and hp_region.get("w", 0) > 5)):
+                now = time.time()
+                if now - last_death_check >= hp_check_interval:
+                    last_death_check = now
+                    if self._check_death(death_template, revival_template, hp_region):
+                        last_progress_time = time.time()
+                        last_target_pos = None
+                        continue
+
             # --- Stuck detection: check if progress stalled ---
-            if stuck_enabled and unstuck_clicks:
+            if stuck_enabled:
                 elapsed = time.time() - last_progress_time
                 if elapsed >= stuck_timeout:
-                    self._log(f"Stuck detected! No progress for {stuck_timeout}s. "
-                              "Clicking unstuck position...", "warning")
-                    pos = unstuck_clicks[unstuck_idx % len(unstuck_clicks)]
-                    self.input.click(pos["x"], pos["y"])
-                    unstuck_idx += 1
-                    self._sleep(1)
-                    last_progress_time = time.time()
-                    last_level, last_exp_img = self._capture_progress_snapshot(
-                        level_region, exp_region)
-                    continue
+                    # Determine unstuck positions
+                    if radial_positions:
+                        positions_to_use = radial_positions
+                    elif unstuck_clicks:
+                        positions_to_use = unstuck_clicks
+                    else:
+                        positions_to_use = None
 
-            # Find and click scarecrow (closest to character first)
-            if scarecrow_templates or hsv_range:
+                    if positions_to_use:
+                        self._log(f"Stuck detected! No progress for {stuck_timeout}s. "
+                                  f"Clicking unstuck position #{unstuck_idx + 1}...", "warning")
+                        pos = positions_to_use[unstuck_idx % len(positions_to_use)]
+                        self.input.click(pos["x"], pos["y"])
+                        unstuck_idx += 1
+                        self._sleep(1)
+                        last_progress_time = time.time()
+                        last_target_pos = None  # Reset target lock after unstuck
+                        last_level, last_exp_img = self._capture_progress_snapshot(
+                            level_region, exp_region)
+                        continue
+
+            # --- Target lock: try clicking last known target first ---
+            if target_lock_enabled and last_target_pos and (scarecrow_templates or hsv_range):
+                # Check if the scarecrow is still at the last known position
+                found, sx, sy, conf, idx = self.recognizer.find_scarecrow(
+                    scarecrow_region, scarecrow_templates, hsv_range,
+                    origin={"x": last_target_pos[0], "y": last_target_pos[1]},
+                )
+                if found:
+                    dist = abs(sx - last_target_pos[0]) + abs(sy - last_target_pos[1])
+                    if dist <= target_tolerance:
+                        # Same target still there, click it
+                        self.input.click(sx, sy)
+                        last_target_pos = (sx, sy)
+                        self._sleep(click_delay)
+                        # Fall through to progress/level check below
+                    else:
+                        # Target moved or disappeared, find new closest
+                        self.input.click(sx, sy)
+                        last_target_pos = (sx, sy)
+                        self._log("Target moved, switched to nearest scarecrow", "debug")
+                        self._sleep(click_delay)
+                else:
+                    # Target disappeared, clear lock and find new
+                    last_target_pos = None
+                    self._log("Target lost, searching for new scarecrow...", "debug")
+
+            # --- Find and click scarecrow (closest to character first) ---
+            if last_target_pos is None and (scarecrow_templates or hsv_range):
                 found, sx, sy, conf, idx = self.recognizer.find_scarecrow(
                     scarecrow_region, scarecrow_templates, hsv_range,
                     origin=origin,
                 )
                 if found:
                     self.input.click(sx, sy)
+                    last_target_pos = (sx, sy) if target_lock_enabled else None
                     if idx >= 0:
                         self._log(f"Scarecrow clicked (template #{idx+1}, conf={conf:.2f})",
                                   "debug")
@@ -390,7 +563,7 @@ class AutomationEngine:
                     self._log("Scarecrow not found, retrying...", "warning")
                     self._sleep(1)
                     continue
-            self._sleep(click_delay)
+                self._sleep(click_delay)
 
             # --- Check for progress (level or EXP change) ---
             cur_level, cur_exp_img = self._capture_progress_snapshot(

@@ -129,7 +129,7 @@ class AutomationEngine:
         """OCR a number with retries for reliability.
         Returns int or None.
         """
-        retries = retries or self._ocr_retries
+        retries = retries if retries is not None else self._ocr_retries
         for attempt in range(retries):
             result = self.recognizer.ocr_number(region)
             if result is not None:
@@ -156,7 +156,7 @@ class AutomationEngine:
         step_func should return (success, *results).
         Returns the step_func result on success, or None on all retries exhausted.
         """
-        max_retries = max_retries or self._step_max_retries
+        max_retries = max_retries if max_retries is not None else self._step_max_retries
         for attempt in range(max_retries):
             self._check_stop()
             self._wait_pause()
@@ -705,10 +705,12 @@ class AutomationEngine:
 
             if leveled_up:
                 # Re-read level via OCR for accuracy (with retry)
+                prev_level = current_level
                 ocr_level = self._ocr_number_retry(level_region)
                 if ocr_level is not None:
                     current_level = ocr_level
-                else:
+                elif current_level == prev_level:
+                    # Only increment if OCR path didn't already update current_level
                     current_level += 1
 
                 self._log(f"Level up detected! Current level: {current_level}")

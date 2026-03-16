@@ -11,12 +11,12 @@ def _copy_to_clipboard(text):
     """Copy text to system clipboard (cross-platform)."""
     system = platform.system()
     if system == "Windows":
-        # Use PowerShell to avoid encoding issues with clip.exe
+        # Use PowerShell with stdin pipe to avoid command injection via quotes in text
         process = subprocess.Popen(
-            ["powershell", "-command", f"Set-Clipboard -Value '{text}'"],
+            ["powershell", "-command", "$input | Set-Clipboard"],
             stdin=subprocess.PIPE,
         )
-        process.communicate()
+        process.communicate(text.encode("utf-16-le"))
     elif system == "Darwin":
         process = subprocess.Popen(["pbcopy"], stdin=subprocess.PIPE)
         process.communicate(text.encode("utf-8"))

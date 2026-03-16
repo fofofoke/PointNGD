@@ -6,6 +6,7 @@ DEFAULT_CONFIG = {
     "input_method": "software",  # "software" or "arduino"
     "arduino_port": "COM3",
     "arduino_baudrate": 9600,
+    "target_window_title": "",  # partial window title to bind to
     "character_name": "Knight001",
     "telegram_bot_token": "",
     "telegram_chat_id": "",

@@ -13,6 +13,7 @@ from core.hotkeys import HotkeyManager
 from gui.roi_editor import ROIEditor, ClickPositionEditor
 from gui.image_manager import ImageManager
 from gui.scarecrow_editor import ScarecrowEditor
+from gui.window_utils import find_windows_by_title, get_window_rect, capture_window
 
 
 class MainWindow:
@@ -198,6 +199,30 @@ class MainWindow:
             "    Windows only. Falls back to clipboard on other OS.",
             foreground="gray",
         ).pack(anchor=tk.W, padx=10)
+
+        # Target Window
+        win_frame = ttk.LabelFrame(scroll_frame, text="Target Window")
+        win_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        ttk.Label(win_frame,
+                  text="Partial window title to bind to. All ROI/click positions "
+                  "become relative to this window.").pack(
+            anchor=tk.W, padx=10, pady=2)
+
+        win_entry_row = ttk.Frame(win_frame)
+        win_entry_row.pack(fill=tk.X, padx=10, pady=2)
+
+        self.target_window_var = tk.StringVar(value="")
+        ttk.Entry(win_entry_row, textvariable=self.target_window_var, width=30).pack(
+            side=tk.LEFT, padx=(0, 5))
+        ttk.Button(win_entry_row, text="Find Window",
+                   command=self._find_target_window).pack(side=tk.LEFT, padx=2)
+        ttk.Button(win_entry_row, text="Test Capture",
+                   command=self._test_window_capture).pack(side=tk.LEFT, padx=2)
+
+        self.window_status_var = tk.StringVar(value="")
+        ttk.Label(win_frame, textvariable=self.window_status_var,
+                  foreground="gray").pack(anchor=tk.W, padx=10, pady=2)
 
         # Character Settings
         char_frame = ttk.LabelFrame(scroll_frame, text="Character Settings")
@@ -687,6 +712,86 @@ class MainWindow:
 
         ttk.Button(win, text="Delete", command=on_delete).pack(pady=10)
 
+    def _find_target_window(self):
+        """Search for windows matching the title and display results."""
+        title = self.target_window_var.get().strip()
+        if not title:
+            messagebox.showwarning("Warning", "Enter a window title substring first.")
+            return
+        windows = find_windows_by_title(title)
+        if not windows:
+            self.window_status_var.set("No matching windows found.")
+            return
+
+        if len(windows) == 1:
+            wid, wtitle = windows[0]
+            rect = get_window_rect(wid)
+            if rect:
+                self.window_status_var.set(
+                    f"Found: \"{wtitle}\" at ({rect['x']},{rect['y']}) "
+                    f"{rect['w']}x{rect['h']}")
+            else:
+                self.window_status_var.set(f"Found: \"{wtitle}\" (could not get rect)")
+        else:
+            # Multiple matches - show selection dialog
+            win = tk.Toplevel(self.root)
+            win.title("Select Target Window")
+            win.geometry("500x300")
+            ttk.Label(win, text=f"Found {len(windows)} matching windows:",
+                      font=("", 11)).pack(pady=10)
+            listbox = tk.Listbox(win, font=("", 10))
+            listbox.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+            for wid, wtitle in windows:
+                listbox.insert(tk.END, wtitle)
+
+            def on_select():
+                sel = listbox.curselection()
+                if not sel:
+                    return
+                wid, wtitle = windows[sel[0]]
+                self.target_window_var.set(title)
+                rect = get_window_rect(wid)
+                if rect:
+                    self.window_status_var.set(
+                        f"Selected: \"{wtitle}\" at ({rect['x']},{rect['y']}) "
+                        f"{rect['w']}x{rect['h']}")
+                win.destroy()
+
+            ttk.Button(win, text="Select", command=on_select).pack(pady=10)
+
+    def _test_window_capture(self):
+        """Capture the target window and show a preview."""
+        title = self.target_window_var.get().strip()
+        if not title:
+            messagebox.showwarning("Warning", "Enter a window title first.")
+            return
+        windows = find_windows_by_title(title)
+        if not windows:
+            messagebox.showerror("Error", f"No window matching \"{title}\" found.")
+            return
+
+        wid = windows[0][0]
+        img, rect = capture_window(wid)
+        if img is None:
+            messagebox.showerror("Error", "Failed to capture window.")
+            return
+
+        # Show preview
+        preview = tk.Toplevel(self.root)
+        preview.title(f"Window Capture Preview ({rect['w']}x{rect['h']})")
+        from PIL import Image as PILImage, ImageTk
+        max_w, max_h = 800, 600
+        scale = min(max_w / img.width, max_h / img.height, 1.0)
+        disp = img.resize((int(img.width * scale), int(img.height * scale)), PILImage.LANCZOS)
+        photo = ImageTk.PhotoImage(disp)
+        canvas = tk.Canvas(preview, width=disp.width, height=disp.height)
+        canvas.pack()
+        canvas.create_image(0, 0, anchor=tk.NW, image=photo)
+        canvas._photo = photo  # prevent GC
+
+        self.window_status_var.set(
+            f"Captured: \"{windows[0][1]}\" ({rect['w']}x{rect['h']})")
+
     def _toggle_arduino(self):
         pass  # Arduino frame is always visible
 
@@ -700,6 +805,7 @@ class MainWindow:
             self.config["arduino_baudrate"] = 9600
         self.config["character_name"] = self.char_name_var.get()
         self.config["korean_input_method"] = self.korean_method_var.get()
+        self.config["target_window_title"] = self.target_window_var.get().strip()
 
         # Stuck detection
         unstuck_clicks = []
@@ -773,6 +879,7 @@ class MainWindow:
         self.arduino_baud_var.set(str(self.config.get("arduino_baudrate", 9600)))
         self.char_name_var.set(self.config.get("character_name", "Knight001"))
         self.korean_method_var.set(self.config.get("korean_input_method", "clipboard"))
+        self.target_window_var.set(self.config.get("target_window_title", ""))
 
         # Stuck detection
         stuck = self.config.get("stuck_detection", {})

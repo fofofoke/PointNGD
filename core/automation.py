@@ -10,6 +10,7 @@ from core.image_recognition import ImageRecognition
 from core.input_handler import create_input_handler
 from core.telegram_notifier import TelegramNotifier
 from core.stats import StatsTracker
+from gui.window_utils import find_windows_by_title, get_window_rect
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,11 @@ class AutomationEngine:
         self.current_step = 0
         self.stats = StatsTracker()
 
+        # Target window offset (for window-relative coordinates)
+        self._win_offset_x = 0
+        self._win_offset_y = 0
+        self._target_window_id = None
+
         # Error screenshot directory
         self._error_ss_dir = config.get("error_screenshot_dir", "error_screenshots")
         os.makedirs(self._error_ss_dir, exist_ok=True)
@@ -103,12 +109,52 @@ class AutomationEngine:
                 break
             time.sleep(min(0.1, remaining))
 
+    def _refresh_window(self):
+        """Refresh target window position. Returns True if OK."""
+        title = self.config.get("target_window_title", "")
+        if not title:
+            self._win_offset_x = 0
+            self._win_offset_y = 0
+            return True
+        windows = find_windows_by_title(title)
+        if not windows:
+            self._log(f"Target window '{title}' not found!", "warning")
+            return False
+        self._target_window_id = windows[0][0]
+        rect = get_window_rect(self._target_window_id)
+        if not rect:
+            self._log("Failed to get target window rect!", "warning")
+            return False
+        self._win_offset_x = rect["x"]
+        self._win_offset_y = rect["y"]
+        return True
+
+    def _abs_roi(self, roi):
+        """Convert window-relative ROI dict to absolute screen ROI."""
+        if not roi:
+            return roi
+        return {
+            "x": roi["x"] + self._win_offset_x,
+            "y": roi["y"] + self._win_offset_y,
+            "w": roi["w"],
+            "h": roi["h"],
+        }
+
+    def _abs_pos(self, pos):
+        """Convert window-relative position dict to absolute screen position."""
+        if not pos:
+            return pos
+        return {
+            "x": pos["x"] + self._win_offset_x,
+            "y": pos["y"] + self._win_offset_y,
+        }
+
     def _wait_and_find(self, image_key, region_key, timeout=10, interval=0.5):
         """Wait for a template image to appear in a region.
         Returns (found, abs_x, abs_y).
         """
         template_path = self.config["images"].get(image_key, "")
-        region = self.config["roi"].get(region_key)
+        region = self._abs_roi(self.config["roi"].get(region_key))
         if not template_path:
             self._log(f"Warning: No image set for '{image_key}'", "warning")
             return False, 0, 0
@@ -117,6 +163,8 @@ class AutomationEngine:
         while time.time() < end_time:
             self._check_stop()
             self._wait_pause()
+            self._refresh_window()
+            region = self._abs_roi(self.config["roi"].get(region_key))
             found, ax, ay, conf = self.recognizer.find_template_in_region(
                 template_path, region
             )
@@ -216,6 +264,9 @@ class AutomationEngine:
         self.stats.start()
         try:
             self._init_input()
+            if not self._refresh_window():
+                self._log("Cannot find target window. Check 'Target Window' setting.", "error")
+                return
             while not self._stop_event.is_set():
                 self.iteration_count += 1
                 self.stats.record_iteration()
@@ -291,13 +342,14 @@ class AutomationEngine:
         # Step 3: Verify knight image, retry click if needed
         self.current_step = 3
         self._log("Step 3: Verifying knight selection...")
-        verify_pos = self.config["click_positions"]["knight_verify_click"]
+        self._refresh_window()
+        verify_pos = self._abs_pos(self.config["click_positions"]["knight_verify_click"])
         for attempt in range(5):
             self._check_stop()
             self.input.click(verify_pos["x"], verify_pos["y"])
             self._sleep(0.5)
             template = self.config["images"].get("knight_verify", "")
-            region = self.config["roi"]["knight_verify"]
+            region = self._abs_roi(self.config["roi"]["knight_verify"])
             if template:
                 found, _, _, _ = self.recognizer.find_template_in_region(template, region)
                 if found:
@@ -311,7 +363,8 @@ class AutomationEngine:
         self.current_step = 4
         self._log("Step 4: Entering character name...")
         self._check_stop()
-        name_pos = self.config["click_positions"]["name_input_click"]
+        self._refresh_window()
+        name_pos = self._abs_pos(self.config["click_positions"]["name_input_click"])
         self.input.click(name_pos["x"], name_pos["y"])
         self._sleep(0.3)
         char_name = self.config.get("character_name", "Knight001")
@@ -332,7 +385,8 @@ class AutomationEngine:
         self.current_step = 6
         self._log("Step 6: Entering game...")
         self._check_stop()
-        char_pos = self.config["click_positions"]["character_slot_click"]
+        self._refresh_window()
+        char_pos = self._abs_pos(self.config["click_positions"]["character_slot_click"])
         self._sleep(1)
         self.input.double_click(char_pos["x"], char_pos["y"])
         wait_time = self.config.get("wait_after_enter_game", 5)
@@ -369,7 +423,8 @@ class AutomationEngine:
         self._sleep(scarecrow_delay)
 
         # Click initial point after entering
-        after_pos = self.config["click_positions"]["after_enter_click"]
+        self._refresh_window()
+        after_pos = self._abs_pos(self.config["click_positions"]["after_enter_click"])
         self.input.click(after_pos["x"], after_pos["y"])
         self._sleep(1)
 
@@ -409,7 +464,7 @@ class AutomationEngine:
 
         # Method 1: Check for death screen image
         if death_template:
-            screen = self.recognizer.capture_screen()
+            screen = self._capture_target_screen()
             found, _, _, _ = self.recognizer.find_template(screen, death_template)
             if found:
                 death_detected = True
@@ -441,15 +496,15 @@ class AutomationEngine:
             else:
                 self._log("Revival button not found, clicking death screen...", "warning")
                 if death_template:
-                    screen = self.recognizer.capture_screen()
+                    screen = self._capture_target_screen()
                     found, dx, dy, _ = self.recognizer.find_template(screen, death_template)
                     if found:
-                        self.input.click(dx, dy)
+                        self.input.click(dx + self._win_offset_x, dy + self._win_offset_y)
         elif death_template:
-            screen = self.recognizer.capture_screen()
+            screen = self._capture_target_screen()
             found, dx, dy, _ = self.recognizer.find_template(screen, death_template)
             if found:
-                self.input.click(dx, dy)
+                self.input.click(dx + self._win_offset_x, dy + self._win_offset_y)
                 self._log("Clicked death screen image")
 
         self._sleep(2)
@@ -476,18 +531,36 @@ class AutomationEngine:
         self._log("Death recovery complete. Resuming scarecrow clicking...")
         return True
 
+    def _capture_target_screen(self, region=None):
+        """Capture screen within target window (or full screen if no target).
+
+        If region is given, captures that absolute-coordinate region.
+        Otherwise captures the full target window area.
+        Returns numpy BGR image.
+        """
+        if region:
+            return self.recognizer.capture_screen(region)
+        # Capture the whole target window area
+        if self._target_window_id:
+            rect = get_window_rect(self._target_window_id)
+            if rect:
+                return self.recognizer.capture_screen(rect)
+        return self.recognizer.capture_screen()
+
     def _wait_and_find_by_path(self, template_path, timeout=10, interval=0.5):
-        """Wait for a template image (by path) to appear on full screen.
+        """Wait for a template image (by path) to appear on target window/screen.
         Returns (found, x, y).
         """
         end_time = time.time() + timeout
         while time.time() < end_time:
             self._check_stop()
             self._wait_pause()
-            screen = self.recognizer.capture_screen()
+            self._refresh_window()
+            screen = self._capture_target_screen()
             found, x, y, _ = self.recognizer.find_template(screen, template_path)
             if found:
-                return True, x, y
+                # x, y are relative to the captured image; add window offset
+                return True, x + self._win_offset_x, y + self._win_offset_y
             time.sleep(interval)
         return False, 0, 0
 
@@ -509,12 +582,6 @@ class AutomationEngine:
         click_delay = self.config.get("scarecrow_click_delay", 0.5)
         level_check_method = self.config.get("level_check_method", "both")
         level_up_template = self.config["images"].get("level_up_effect", "")
-        scarecrow_region = self.config["roi"]["scarecrow_search"]
-        level_region = self.config["roi"]["level_display"]
-        mp_region = self.config["roi"]["mp_display"]
-        # exp_display: check roi first, fallback to root-level for backward compat
-        exp_region = self.config["roi"].get("exp_display") or self.config.get("exp_display")
-        hp_region = self.config["roi"].get("hp_display")
 
         # Death recovery settings
         death_cfg = self.config.get("death_recovery", {})
@@ -532,9 +599,8 @@ class AutomationEngine:
         target_tolerance = target_cfg.get("position_tolerance", 30)
         last_target_pos = None  # (x, y) of last clicked scarecrow
 
-        # Character center for distance-based sorting
+        # Character center for distance-based sorting (window-relative)
         char_center = self.config.get("character_center")
-        origin = char_center if char_center and char_center.get("x", 0) > 0 else None
 
         # Build scarecrow template list (multi-direction)
         scarecrow_templates = list(self.config.get("scarecrow_templates", []))
@@ -546,6 +612,7 @@ class AutomationEngine:
         hsv_cfg = self.config.get("scarecrow_hsv", {})
         hsv_range = hsv_cfg if hsv_cfg.get("enabled") else None
 
+        origin = self._abs_pos(char_center) if char_center and char_center.get("x", 0) > 0 else None
         features = []
         if scarecrow_templates:
             features.append(f"{len(scarecrow_templates)} templates")
@@ -581,6 +648,10 @@ class AutomationEngine:
 
         # Track progress for stuck detection
         last_progress_time = time.time()
+        self._refresh_window()
+        level_region = self._abs_roi(self.config["roi"]["level_display"])
+        exp_region_cfg = self.config["roi"].get("exp_display") or self.config.get("exp_display")
+        exp_region = self._abs_roi(exp_region_cfg) if exp_region_cfg else None
         last_level, last_exp_img = self._capture_progress_snapshot(level_region, exp_region)
 
         # MP requirements per level
@@ -589,6 +660,16 @@ class AutomationEngine:
         while not self._stop_event.is_set():
             self._check_stop()
             self._wait_pause()
+
+            # Refresh window position each loop iteration
+            self._refresh_window()
+            scarecrow_region = self._abs_roi(self.config["roi"]["scarecrow_search"])
+            level_region = self._abs_roi(self.config["roi"]["level_display"])
+            mp_region = self._abs_roi(self.config["roi"]["mp_display"])
+            exp_region = self._abs_roi(exp_region_cfg) if exp_region_cfg else None
+            hp_region_cfg = self.config["roi"].get("hp_display")
+            hp_region = self._abs_roi(hp_region_cfg) if hp_region_cfg else None
+            origin = self._abs_pos(char_center) if char_center and char_center.get("x", 0) > 0 else None
 
             # --- Death check ---
             if death_enabled and (death_template or (hp_region and hp_region.get("w", 0) > 5)):
@@ -606,11 +687,11 @@ class AutomationEngine:
             if stuck_enabled:
                 elapsed = time.time() - last_progress_time
                 if elapsed >= stuck_timeout:
-                    # Determine unstuck positions
+                    # Determine unstuck positions (convert to absolute)
                     if radial_positions:
                         positions_to_use = radial_positions
                     elif unstuck_clicks:
-                        positions_to_use = unstuck_clicks
+                        positions_to_use = [self._abs_pos(p) for p in unstuck_clicks]
                     else:
                         positions_to_use = None
 
@@ -775,7 +856,8 @@ class AutomationEngine:
         self._sleep(1)
 
         # Click exit confirm
-        exit_pos = self.config["click_positions"]["exit_confirm_click"]
+        self._refresh_window()
+        exit_pos = self._abs_pos(self.config["click_positions"]["exit_confirm_click"])
         found, x, y = self._wait_and_find("exit_button", "exit_button", timeout=5)
         if found:
             self.input.click(x, y)
@@ -786,11 +868,12 @@ class AutomationEngine:
         # Step 12: Select character and delete
         self.current_step = 12
         self._log("Step 12: Deleting character...")
-        char_pos = self.config["click_positions"]["character_slot_click"]
+        self._refresh_window()
+        char_pos = self._abs_pos(self.config["click_positions"]["character_slot_click"])
         self.input.click(char_pos["x"], char_pos["y"])
         self._sleep(0.5)
 
-        delete_pos = self.config["click_positions"]["delete_click"]
+        delete_pos = self._abs_pos(self.config["click_positions"]["delete_click"])
         self.input.click(delete_pos["x"], delete_pos["y"])
         self._sleep(1)
 
@@ -801,7 +884,7 @@ class AutomationEngine:
 
         # Wait for popup to appear
         delete_template = self.config["images"].get("delete_popup", "")
-        delete_region = self.config["roi"]["delete_popup"]
+        delete_region = self._abs_roi(self.config["roi"]["delete_popup"])
         if delete_template:
             # Wait for popup to appear
             popup_appeared = False

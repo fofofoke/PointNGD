@@ -6,6 +6,7 @@ import os
 import shutil
 
 from core.image_recognition import ImageRecognition
+from gui.window_utils import find_windows_by_title, get_window_rect
 
 
 class ScarecrowEditor(tk.Toplevel):
@@ -18,11 +19,35 @@ class ScarecrowEditor(tk.Toplevel):
         self.images_dir = images_dir
         self.on_save = on_save
         self.recognizer = ImageRecognition()
+        self._window_id = None
+        self._window_rect = None
+        self._resolve_target_window()
         self.geometry("1000x750")
 
         os.makedirs(images_dir, exist_ok=True)
         self._build_ui()
         self._load_from_config()
+
+    def _resolve_target_window(self):
+        title = self.config.get("target_window_title", "")
+        if not title:
+            return
+        windows = find_windows_by_title(title)
+        if windows:
+            self._window_id = windows[0][0]
+            self._window_rect = get_window_rect(self._window_id)
+
+    def _abs_roi(self, roi):
+        """Convert window-relative ROI to absolute screen ROI."""
+        if not roi:
+            return roi
+        result = dict(roi)
+        if self._window_id:
+            rect = get_window_rect(self._window_id)
+            if rect:
+                result["x"] = roi["x"] + rect["x"]
+                result["y"] = roi["y"] + rect["y"]
+        return result
 
     def _build_ui(self):
         # === Top: title ===
@@ -215,7 +240,11 @@ class ScarecrowEditor(tk.Toplevel):
         self.withdraw()
         self.update()
         from gui.image_manager import ScreenRegionCapture
-        capturer = ScreenRegionCapture(self, callback=self._on_screen_capture)
+        capturer = ScreenRegionCapture(
+            self,
+            window_id=self._window_id,
+            callback=self._on_screen_capture,
+        )
         capturer.wait_window()
         self.deiconify()
 
@@ -230,13 +259,16 @@ class ScarecrowEditor(tk.Toplevel):
                                    "Set the 'Scarecrow Search Area' ROI first.")
             return
         import mss
+        import time
         self.withdraw()
         self.update()
-        import time
         time.sleep(0.5)
+
+        # Convert window-relative ROI to absolute for capture
+        abs_roi = self._abs_roi(roi)
         with mss.mss() as sct:
-            monitor = {"left": roi["x"], "top": roi["y"],
-                       "width": roi["w"], "height": roi["h"]}
+            monitor = {"left": abs_roi["x"], "top": abs_roi["y"],
+                       "width": abs_roi["w"], "height": abs_roi["h"]}
             grab = sct.grab(monitor)
             img = Image.frombytes("RGB", grab.size, grab.rgb)
         self.deiconify()
@@ -247,7 +279,11 @@ class ScarecrowEditor(tk.Toplevel):
                             "Now drag to select just the scarecrow in the next screen.")
         self.withdraw()
         from gui.image_manager import ScreenRegionCapture
-        capturer = ScreenRegionCapture(self, callback=self._on_screen_capture)
+        capturer = ScreenRegionCapture(
+            self,
+            window_id=self._window_id,
+            callback=self._on_screen_capture,
+        )
         capturer.wait_window()
         self.deiconify()
 
@@ -277,12 +313,12 @@ class ScarecrowEditor(tk.Toplevel):
             messagebox.showwarning("Warning", "Set scarecrow search ROI first.")
             return
 
-        # Need to capture from a small area where the scarecrow is
         messagebox.showinfo("Info",
                             "Position the game so the scarecrow is visible in the ROI area,\n"
                             "then click OK. The median color will be sampled.")
 
-        result = self.recognizer.sample_hsv_from_region(roi)
+        abs_roi = self._abs_roi(roi)
+        result = self.recognizer.sample_hsv_from_region(abs_roi)
         self.hsv_vars["h_min"].set(result["h_min"])
         self.hsv_vars["h_max"].set(result["h_max"])
         self.hsv_vars["s_min"].set(result["s_min"])
@@ -303,8 +339,9 @@ class ScarecrowEditor(tk.Toplevel):
             messagebox.showwarning("Warning", "Set scarecrow search ROI first.")
             return
 
+        abs_roi = self._abs_roi(roi)
         hsv_range = self._get_hsv_range()
-        masked_img, pixel_count = self.recognizer.preview_hsv_mask(roi, hsv_range)
+        masked_img, pixel_count = self.recognizer.preview_hsv_mask(abs_roi, hsv_range)
 
         cw = self.hsv_preview_canvas.winfo_width() or 400
         ch = self.hsv_preview_canvas.winfo_height() or 200
@@ -336,18 +373,24 @@ class ScarecrowEditor(tk.Toplevel):
 
         hsv_range = self._get_hsv_range() if self.hsv_enabled_var.get() else None
 
+        abs_roi = self._abs_roi(roi)
         found, ax, ay, conf, idx = self.recognizer.find_scarecrow(
-            roi, templates, hsv_range
+            abs_roi, templates, hsv_range
         )
 
         if found:
             method = f"template #{idx+1}" if idx >= 0 else "HSV fallback"
+            # Convert absolute coords back to window-relative for display
+            disp_x, disp_y = ax, ay
+            if self._window_id and self._window_rect:
+                disp_x -= self._window_rect.get("x", 0)
+                disp_y -= self._window_rect.get("y", 0)
             self.status_var.set(
-                f"FOUND at ({ax}, {ay}), confidence={conf:.3f}, method={method}"
+                f"FOUND at ({disp_x}, {disp_y}), confidence={conf:.3f}, method={method}"
             )
             messagebox.showinfo("Test Result",
                                 f"Scarecrow found!\n"
-                                f"Position: ({ax}, {ay})\n"
+                                f"Position: ({disp_x}, {disp_y}) [window-relative]\n"
                                 f"Confidence: {conf:.3f}\n"
                                 f"Method: {method}")
         else:

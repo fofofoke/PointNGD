@@ -139,7 +139,8 @@ class AutomationEngine:
         method = self.config.get("input_method", "software")
         port = self.config.get("arduino_port", "COM3")
         baudrate = self.config.get("arduino_baudrate", 9600)
-        self.input = create_input_handler(method, port, baudrate)
+        korean_method = self.config.get("korean_input_method", "clipboard")
+        self.input = create_input_handler(method, port, baudrate, korean_method)
         self._log(f"Input method: {method}")
 
     def _run_loop(self):

@@ -120,6 +120,31 @@ class MainWindow:
             side=tk.LEFT, padx=5
         )
 
+        # Korean Input Method
+        korean_frame = ttk.LabelFrame(scroll_frame, text="Korean Input Method")
+        korean_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        self.korean_method_var = tk.StringVar(value="clipboard")
+        ttk.Radiobutton(
+            korean_frame, text="Clipboard Paste (Ctrl+V)",
+            variable=self.korean_method_var, value="clipboard",
+        ).pack(anchor=tk.W, padx=10, pady=2)
+        ttk.Label(
+            korean_frame,
+            text="    Simple and fast. May not work if the game blocks Ctrl+V.",
+            foreground="gray",
+        ).pack(anchor=tk.W, padx=10)
+        ttk.Radiobutton(
+            korean_frame, text="Win32 SendInput (Recommended for games)",
+            variable=self.korean_method_var, value="sendinput",
+        ).pack(anchor=tk.W, padx=10, pady=2)
+        ttk.Label(
+            korean_frame,
+            text="    OS-level keystroke simulation. Works with most games.\n"
+            "    Windows only. Falls back to clipboard on other OS.",
+            foreground="gray",
+        ).pack(anchor=tk.W, padx=10)
+
         # Character Settings
         char_frame = ttk.LabelFrame(scroll_frame, text="Character Settings")
         char_frame.pack(fill=tk.X, padx=10, pady=5)
@@ -286,6 +311,7 @@ class MainWindow:
         except ValueError:
             self.config["arduino_baudrate"] = 9600
         self.config["character_name"] = self.char_name_var.get()
+        self.config["korean_input_method"] = self.korean_method_var.get()
         self.config["telegram_bot_token"] = self.tg_token_var.get()
         self.config["telegram_chat_id"] = self.tg_chat_var.get()
         self.config["level_check_method"] = self.level_method_var.get()
@@ -312,6 +338,7 @@ class MainWindow:
         self.arduino_port_var.set(self.config.get("arduino_port", "COM3"))
         self.arduino_baud_var.set(str(self.config.get("arduino_baudrate", 9600)))
         self.char_name_var.set(self.config.get("character_name", "Knight001"))
+        self.korean_method_var.set(self.config.get("korean_input_method", "clipboard"))
         self.tg_token_var.set(self.config.get("telegram_bot_token", ""))
         self.tg_chat_var.set(self.config.get("telegram_chat_id", ""))
         self.level_method_var.set(self.config.get("level_check_method", "both"))

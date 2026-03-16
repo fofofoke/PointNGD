@@ -98,7 +98,10 @@ class AutomationEngine:
         while time.time() < end:
             self._check_stop()
             self._wait_pause()
-            time.sleep(min(0.1, end - time.time()))
+            remaining = end - time.time()
+            if remaining <= 0:
+                break
+            time.sleep(min(0.1, remaining))
 
     def _wait_and_find(self, image_key, region_key, timeout=10, interval=0.5):
         """Wait for a template image to appear in a region.
@@ -509,7 +512,8 @@ class AutomationEngine:
         scarecrow_region = self.config["roi"]["scarecrow_search"]
         level_region = self.config["roi"]["level_display"]
         mp_region = self.config["roi"]["mp_display"]
-        exp_region = self.config.get("exp_display")
+        # exp_display: check roi first, fallback to root-level for backward compat
+        exp_region = self.config["roi"].get("exp_display") or self.config.get("exp_display")
         hp_region = self.config["roi"].get("hp_display")
 
         # Death recovery settings
@@ -624,9 +628,11 @@ class AutomationEngine:
                             level_region, exp_region)
                         continue
 
-            # --- Target lock: try clicking last known target first ---
+            # --- Find and click scarecrow ---
+            scarecrow_clicked = False
+
+            # Target lock: try clicking last known target first
             if target_lock_enabled and last_target_pos and (scarecrow_templates or hsv_range):
-                # Check if the scarecrow is still at the last known position
                 found, sx, sy, conf, idx = self.recognizer.find_scarecrow(
                     scarecrow_region, scarecrow_templates, hsv_range,
                     origin={"x": last_target_pos[0], "y": last_target_pos[1]},
@@ -634,24 +640,19 @@ class AutomationEngine:
                 if found:
                     dist = abs(sx - last_target_pos[0]) + abs(sy - last_target_pos[1])
                     if dist <= target_tolerance:
-                        # Same target still there, click it
                         self.input.click(sx, sy)
                         last_target_pos = (sx, sy)
-                        self._sleep(click_delay)
-                        # Fall through to progress/level check below
                     else:
-                        # Target moved or disappeared, find new closest
                         self.input.click(sx, sy)
                         last_target_pos = (sx, sy)
                         self._log("Target moved, switched to nearest scarecrow", "debug")
-                        self._sleep(click_delay)
+                    scarecrow_clicked = True
                 else:
-                    # Target disappeared, clear lock and find new
                     last_target_pos = None
                     self._log("Target lost, searching for new scarecrow...", "debug")
 
-            # --- Find and click scarecrow (closest to character first) ---
-            if last_target_pos is None and (scarecrow_templates or hsv_range):
+            # No target lock hit — search for closest scarecrow
+            if not scarecrow_clicked and (scarecrow_templates or hsv_range):
                 found, sx, sy, conf, idx = self.recognizer.find_scarecrow(
                     scarecrow_region, scarecrow_templates, hsv_range,
                     origin=origin,
@@ -659,6 +660,7 @@ class AutomationEngine:
                 if found:
                     self.input.click(sx, sy)
                     last_target_pos = (sx, sy) if target_lock_enabled else None
+                    scarecrow_clicked = True
                     if idx >= 0:
                         self._log(f"Scarecrow clicked (template #{idx+1}, conf={conf:.2f})",
                                   "debug")
@@ -668,6 +670,8 @@ class AutomationEngine:
                     self._log("Scarecrow not found, retrying...", "warning")
                     self._sleep(1)
                     continue
+
+            if scarecrow_clicked:
                 self._sleep(click_delay)
 
             # --- Check for progress (level or EXP change) ---
@@ -717,6 +721,19 @@ class AutomationEngine:
                     continue
 
                 actual_mp = self._ocr_number_retry(mp_region)
+
+                if actual_mp is None:
+                    self._log(f"Level {current_level}: MP OCR failed! "
+                              "Retrying after short delay...", "warning")
+                    self._sleep(1)
+                    actual_mp = self._ocr_number_retry(mp_region)
+
+                if actual_mp is None:
+                    self._log(f"Level {current_level}: MP still unreadable. "
+                              "Skipping MP check, continuing scarecrow.", "warning")
+                    self._save_error_screenshot(f"mp_ocr_fail_lv{current_level}")
+                    continue
+
                 self._log(f"Level {current_level}: MP = {actual_mp} (need {required_mp})")
 
                 if current_level == 5:
@@ -788,25 +805,27 @@ class AutomationEngine:
             popup_appeared = False
             for _ in range(int(delete_wait * 2)):
                 self._check_stop()
+                self._wait_pause()
                 found, _, _, _ = self.recognizer.find_template_in_region(
                     delete_template, delete_region
                 )
                 if found:
                     popup_appeared = True
                     break
-                time.sleep(0.5)
+                self._sleep(0.5)
 
             if popup_appeared:
                 # Wait for popup to disappear
                 for _ in range(int(delete_wait * 4)):
                     self._check_stop()
+                    self._wait_pause()
                     found, _, _, _ = self.recognizer.find_template_in_region(
                         delete_template, delete_region
                     )
                     if not found:
                         self._log("Delete complete!")
                         break
-                    time.sleep(0.5)
+                    self._sleep(0.5)
         else:
             # No delete popup image, just wait
             self._sleep(delete_wait)

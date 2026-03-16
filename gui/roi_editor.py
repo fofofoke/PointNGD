@@ -6,7 +6,7 @@ import mss
 import os
 import time
 
-from gui.window_utils import find_windows_by_title, get_window_rect, capture_window
+from gui.window_utils import find_windows_by_title, get_window_rect, capture_window, list_all_windows
 
 
 class ROIEditor(tk.Toplevel):
@@ -146,6 +146,10 @@ class ROIEditor(tk.Toplevel):
         ttk.Button(btn_frame, text="Capture Screen", command=self._capture_screen).pack(
             fill=tk.X, pady=2
         )
+        ttk.Button(btn_frame, text="Capture Window...",
+                   command=self._capture_selected_window).pack(
+            fill=tk.X, pady=2
+        )
         ttk.Button(btn_frame, text="Save All ROIs", command=self._save_all).pack(
             fill=tk.X, pady=2
         )
@@ -197,6 +201,46 @@ class ROIEditor(tk.Toplevel):
         self._display_screenshot()
         mode = "window" if self._window_id else "full screen"
         self.status_var.set(f"Captured ({mode}). Select a ROI, then drag on the image.")
+
+    def _capture_selected_window(self):
+        """Show a window list dialog and capture the selected window."""
+        dialog = WindowSelectDialog(self)
+        self.wait_window(dialog)
+
+        if dialog.selected_window_id is None:
+            return
+
+        wid = dialog.selected_window_id
+
+        self.withdraw()
+        self.update()
+        time.sleep(0.5)
+
+        rect = get_window_rect(wid)
+        if not rect:
+            self.deiconify()
+            messagebox.showerror("Error", "Failed to get window geometry. Is it still open?")
+            return
+
+        img, rect = capture_window(wid)
+        if img is None:
+            self.deiconify()
+            messagebox.showerror("Error", "Failed to capture the selected window.")
+            return
+
+        # Update window tracking so ROI coordinates are relative to this window
+        self._window_id = wid
+        self._window_rect = rect
+        self.screenshot = img
+        self.screen_width = rect["w"]
+        self.screen_height = rect["h"]
+
+        self.deiconify()
+        self._display_screenshot()
+        self.status_var.set(
+            f"Captured window ({rect['w']}x{rect['h']}). "
+            f"Select a ROI, then drag on the image."
+        )
 
     def _display_screenshot(self):
         if self.screenshot is None:
@@ -423,6 +467,70 @@ class ROIEditor(tk.Toplevel):
         self.status_var.set(
             f"ROI '{self.current_roi_key}' captured as template image -> {dest}"
         )
+
+
+class WindowSelectDialog(tk.Toplevel):
+    """Dialog to list and select an active window for capture."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Select Window to Capture")
+        self.selected_window_id = None
+        self._windows = []
+        self.geometry("500x400")
+        self.resizable(True, True)
+        self.transient(parent)
+        self.grab_set()
+        self._build_ui()
+
+    def _build_ui(self):
+        ttk.Label(self, text="Select a window to capture:",
+                  font=("", 11, "bold")).pack(padx=10, pady=(10, 5))
+
+        # Refresh button
+        top_frame = ttk.Frame(self)
+        top_frame.pack(fill=tk.X, padx=10)
+        ttk.Button(top_frame, text="Refresh", command=self._refresh_list).pack(side=tk.RIGHT)
+
+        # Window list
+        list_frame = ttk.Frame(self)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+        scrollbar = ttk.Scrollbar(list_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.window_listbox = tk.Listbox(list_frame, font=("", 10),
+                                         yscrollcommand=scrollbar.set)
+        self.window_listbox.pack(fill=tk.BOTH, expand=True)
+        scrollbar.config(command=self.window_listbox.yview)
+
+        self.window_listbox.bind("<Double-1>", lambda e: self._on_select())
+
+        # Buttons
+        btn_frame = ttk.Frame(self)
+        btn_frame.pack(fill=tk.X, padx=10, pady=10)
+        ttk.Button(btn_frame, text="Capture", command=self._on_select).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Cancel", command=self.destroy).pack(side=tk.RIGHT, padx=5)
+
+        self._refresh_list()
+
+    def _refresh_list(self):
+        self.window_listbox.delete(0, tk.END)
+        self._windows = list_all_windows()
+        for wid, title in self._windows:
+            self.window_listbox.insert(tk.END, title)
+        if not self._windows:
+            self.window_listbox.insert(tk.END, "(No windows found)")
+
+    def _on_select(self):
+        selection = self.window_listbox.curselection()
+        if not selection:
+            return
+        idx = selection[0]
+        if idx >= len(self._windows):
+            return
+        self.selected_window_id = self._windows[idx][0]
+        self.destroy()
 
 
 class ClickPositionEditor(tk.Toplevel):

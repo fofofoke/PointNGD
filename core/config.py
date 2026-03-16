@@ -73,7 +73,6 @@ DEFAULT_CONFIG = {
         "enabled": True,
         "position_tolerance": 30,
     },
-    "exp_display": {"x": 0, "y": 0, "w": 100, "h": 20},
     "character_center": {"x": 0, "y": 0},
     "scarecrow_templates": [],
     "scarecrow_hsv": {

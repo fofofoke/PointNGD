@@ -808,6 +808,22 @@ class MainWindow:
     def _toggle_arduino(self):
         pass  # Arduino frame is always visible
 
+    @staticmethod
+    def _safe_int(value, default):
+        """Parse int from string, returning default on failure."""
+        try:
+            return int(value) if value else default
+        except (ValueError, TypeError):
+            return default
+
+    @staticmethod
+    def _safe_float(value, default):
+        """Parse float from string, returning default on failure."""
+        try:
+            return float(value) if value else default
+        except (ValueError, TypeError):
+            return default
+
     def _apply_ui_to_config(self):
         """Apply UI values to config dict."""
         self.config["input_method"] = self.input_method_var.get()
@@ -832,20 +848,20 @@ class MainWindow:
                     pass
         self.config["stuck_detection"] = {
             "enabled": self.stuck_enabled_var.get(),
-            "timeout": float(self.stuck_timeout_var.get()) if self.stuck_timeout_var.get() else 10,
+            "timeout": self._safe_float(self.stuck_timeout_var.get(), 10),
             "unstuck_clicks": unstuck_clicks,
             "use_radial_movement": self.radial_enabled_var.get(),
-            "radial_distance": int(self.radial_distance_var.get()) if self.radial_distance_var.get() else 100,
+            "radial_distance": self._safe_int(self.radial_distance_var.get(), 100),
         }
 
         self.config["death_recovery"] = {
             "enabled": self.death_enabled_var.get(),
-            "hp_check_interval": float(self.death_interval_var.get()) if self.death_interval_var.get() else 2,
+            "hp_check_interval": self._safe_float(self.death_interval_var.get(), 2),
         }
 
         self.config["target_lock"] = {
             "enabled": self.target_lock_var.get(),
-            "position_tolerance": int(self.target_tolerance_var.get()) if self.target_tolerance_var.get() else 30,
+            "position_tolerance": self._safe_int(self.target_tolerance_var.get(), 30),
         }
 
         self.config["hp_bar_detection"] = {
@@ -854,10 +870,10 @@ class MainWindow:
         }
 
         self.config["step_retry"] = {
-            "max_retries": int(self.step_retry_var.get()) if self.step_retry_var.get() else 3,
+            "max_retries": self._safe_int(self.step_retry_var.get(), 3),
             "retry_delay": 2,
         }
-        self.config["ocr_retry_count"] = int(self.ocr_retry_var.get()) if self.ocr_retry_var.get() else 3
+        self.config["ocr_retry_count"] = self._safe_int(self.ocr_retry_var.get(), 3)
 
         self.config["hotkeys"] = {"enabled": self.hotkeys_enabled_var.get()}
         self.config["log_file"] = {

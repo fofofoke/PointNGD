@@ -21,6 +21,15 @@ class ImageRecognition:
         self.sct = mss.mss()
         self.match_threshold = 0.8
 
+    def close(self):
+        """Close the screen capture resource."""
+        if self.sct:
+            self.sct.close()
+            self.sct = None
+
+    def __del__(self):
+        self.close()
+
     def capture_screen(self, region=None):
         """Capture screen or a specific region.
         region: dict with x, y, w, h keys or None for full screen.

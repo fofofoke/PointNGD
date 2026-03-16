@@ -304,6 +304,8 @@ class AutomationEngine:
         finally:
             if self.input:
                 self.input.close()
+            if self.recognizer:
+                self.recognizer.close()
             # Save stats on finish
             try:
                 self.stats.save_to_file("stats.txt")
@@ -627,7 +629,10 @@ class AutomationEngine:
         if features:
             self._log(f"Scarecrow detection: {' + '.join(features)}")
         else:
-            self._log("Warning: No scarecrow templates or HSV filter configured!", "warning")
+            self._log("Error: No scarecrow templates or HSV filter configured! "
+                       "Cannot proceed with scarecrow loop.", "error")
+            self._save_error_screenshot("no_scarecrow_config")
+            return "error"
 
         # Stuck detection settings
         stuck_cfg = self.config.get("stuck_detection", {})
@@ -774,6 +779,7 @@ class AutomationEngine:
 
             # Check for level up
             leveled_up = False
+            pre_levelup_level = current_level
 
             if level_check_method in ("image", "both") and level_up_template:
                 if self.recognizer.check_level_by_image(level_up_template):
@@ -786,12 +792,11 @@ class AutomationEngine:
 
             if leveled_up:
                 # Re-read level via OCR for accuracy (with retry)
-                prev_level = current_level
                 ocr_level = self._ocr_number_retry(level_region)
                 if ocr_level is not None:
                     current_level = ocr_level
-                elif current_level == prev_level:
-                    # Only increment if OCR path didn't already update current_level
+                elif current_level == pre_levelup_level:
+                    # Only increment if neither OCR path updated current_level
                     current_level += 1
 
                 self._log(f"Level up detected! Current level: {current_level}")

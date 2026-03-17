@@ -18,37 +18,30 @@ class ImageRecognition:
     """Handles screen capture, template matching, and OCR."""
 
     def __init__(self):
-        self.sct = mss.mss()
         self.match_threshold = 0.8
-
-    def close(self):
-        """Close the screen capture resource."""
-        if self.sct:
-            self.sct.close()
-            self.sct = None
-
-    def __del__(self):
-        self.close()
 
     def capture_screen(self, region=None):
         """Capture screen or a specific region.
         region: dict with x, y, w, h keys or None for full screen.
         Returns numpy array (BGR).
-        """
-        if self.sct is None:
-            self.sct = mss.mss()
-        if region:
-            monitor = {
-                "left": region["x"],
-                "top": region["y"],
-                "width": region["w"],
-                "height": region["h"],
-            }
-        else:
-            monitor = self.sct.monitors[1]
 
-        screenshot = self.sct.grab(monitor)
-        img = np.array(screenshot)
+        Creates a fresh mss instance each call to avoid thread-local DC
+        errors when called from a worker thread different from the one
+        that created the previous instance.
+        """
+        with mss.mss() as sct:
+            if region:
+                monitor = {
+                    "left": region["x"],
+                    "top": region["y"],
+                    "width": region["w"],
+                    "height": region["h"],
+                }
+            else:
+                monitor = sct.monitors[1]
+
+            screenshot = sct.grab(monitor)
+            img = np.array(screenshot)
         return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
 
     def capture_screen_pil(self, region=None):

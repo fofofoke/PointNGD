@@ -320,7 +320,12 @@ class ScarecrowEditor(tk.Toplevel):
                             "then click OK. The median color will be sampled.")
 
         abs_roi = self._abs_roi(roi)
+        # Hide editor so we capture the target window, not ourselves
+        self.withdraw()
+        self.update()
+        import time; time.sleep(0.3)
         result = self.recognizer.sample_hsv_from_region(abs_roi)
+        self.deiconify()
         self.hsv_vars["h_min"].set(result["h_min"])
         self.hsv_vars["h_max"].set(result["h_max"])
         self.hsv_vars["s_min"].set(result["s_min"])
@@ -343,7 +348,12 @@ class ScarecrowEditor(tk.Toplevel):
 
         abs_roi = self._abs_roi(roi)
         hsv_range = self._get_hsv_range()
+        # Hide editor so we capture the target window, not ourselves
+        self.withdraw()
+        self.update()
+        import time; time.sleep(0.3)
         masked_img, pixel_count = self.recognizer.preview_hsv_mask(abs_roi, hsv_range)
+        self.deiconify()
 
         cw = self.hsv_preview_canvas.winfo_width() or 400
         ch = self.hsv_preview_canvas.winfo_height() or 200
@@ -376,9 +386,14 @@ class ScarecrowEditor(tk.Toplevel):
         hsv_range = self._get_hsv_range() if self.hsv_enabled_var.get() else None
 
         abs_roi = self._abs_roi(roi)
+        # Hide editor so we capture the target window, not ourselves
+        self.withdraw()
+        self.update()
+        import time; time.sleep(0.3)
         found, ax, ay, conf, idx = self.recognizer.find_scarecrow(
             abs_roi, templates, hsv_range
         )
+        self.deiconify()
 
         if found:
             method = f"template #{idx+1}" if idx >= 0 else "HSV fallback"

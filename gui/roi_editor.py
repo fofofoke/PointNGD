@@ -669,8 +669,7 @@ class ScreenRegionCapture(tk.Toplevel):
             self.after(10, self._cancel)
 
     def _build_window_mode(self):
-        """Capture from target window only."""
-        time.sleep(0.3)
+        """Capture from target window only (uses PrintWindow on Windows)."""
         img, rect = capture_window(self._window_id)
         if img is None:
             self._cancel()

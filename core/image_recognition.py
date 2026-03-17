@@ -150,7 +150,7 @@ class ImageRecognition:
     # --- Scarecrow multi-direction + HSV color detection ---
 
     def find_scarecrow(self, region, templates, hsv_range=None, threshold=None,
-                       origin=None):
+                       origin=None, image=None):
         """Find scarecrow using HSV color filter + multi-template matching.
 
         Matches are sorted by distance from origin (closest first).
@@ -163,12 +163,14 @@ class ImageRecognition:
             threshold: Match confidence threshold.
             origin: Optional dict {"x": int, "y": int} - reference point
                     (e.g. character position). Matches are sorted closest first.
+            image: Optional pre-captured BGR numpy array.  When supplied the
+                   region is only used for coordinate math, not for capture.
 
         Returns:
             (found, abs_x, abs_y, best_confidence, matched_template_index)
         """
         threshold = threshold or self.match_threshold
-        screen = self.capture_screen(region)
+        screen = image if image is not None else self.capture_screen(region)
 
         # Origin in region-local coordinates
         if origin:
@@ -307,12 +309,15 @@ class ImageRecognition:
         cy = int(M["m01"] / M["m00"])
         return True, cx, cy
 
-    def sample_hsv_from_region(self, region):
+    def sample_hsv_from_region(self, region, image=None):
         """Capture a region and return the median HSV values + suggested range.
         Useful for GUI to help user pick HSV range for scarecrow color.
         Returns dict with h_median, s_median, v_median and suggested min/max.
+
+        If *image* (BGR numpy array) is provided, it is used directly instead
+        of capturing the screen.
         """
-        screen = self.capture_screen(region)
+        screen = image if image is not None else self.capture_screen(region)
         hsv = cv2.cvtColor(screen, cv2.COLOR_BGR2HSV)
         h_med = int(np.median(hsv[:, :, 0]))
         s_med = int(np.median(hsv[:, :, 1]))
@@ -324,11 +329,15 @@ class ImageRecognition:
             "v_min": max(0, v_med - 50), "v_max": min(255, v_med + 50),
         }
 
-    def preview_hsv_mask(self, region, hsv_range):
-        """Capture region, apply HSV filter, return masked image as PIL for preview."""
+    def preview_hsv_mask(self, region, hsv_range, image=None):
+        """Capture region, apply HSV filter, return masked image as PIL for preview.
+
+        If *image* (BGR numpy array) is provided, it is used directly instead
+        of capturing the screen.
+        """
         if Image is None:
             raise ImportError("Pillow is required: pip install Pillow")
-        screen = self.capture_screen(region)
+        screen = image if image is not None else self.capture_screen(region)
         mask = self._create_hsv_mask(screen, hsv_range)
         masked = cv2.bitwise_and(screen, screen, mask=mask)
         rgb = cv2.cvtColor(masked, cv2.COLOR_BGR2RGB)

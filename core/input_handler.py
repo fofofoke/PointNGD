@@ -11,12 +11,14 @@ def _copy_to_clipboard(text):
     """Copy text to system clipboard (cross-platform)."""
     system = platform.system()
     if system == "Windows":
-        # Use PowerShell with stdin pipe to avoid command injection via quotes in text
+        # Use PowerShell with UTF-8 encoding to handle Korean and other non-ASCII text
         process = subprocess.Popen(
-            ["powershell", "-command", "$input | Set-Clipboard"],
+            ["powershell", "-command",
+             "[Console]::InputEncoding = [System.Text.Encoding]::UTF8; "
+             "$input | Set-Clipboard"],
             stdin=subprocess.PIPE,
         )
-        process.communicate(text.encode("utf-16-le"))
+        process.communicate(text.encode("utf-8"))
     elif system == "Darwin":
         process = subprocess.Popen(["pbcopy"], stdin=subprocess.PIPE)
         process.communicate(text.encode("utf-8"))
@@ -55,9 +57,19 @@ def _sendinput_unicode(text):
                 ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
             ]
 
+        class MOUSEINPUT(ctypes.Structure):
+            _fields_ = [
+                ("dx", wintypes.LONG),
+                ("dy", wintypes.LONG),
+                ("mouseData", wintypes.DWORD),
+                ("dwFlags", wintypes.DWORD),
+                ("time", wintypes.DWORD),
+                ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+            ]
+
         class INPUT(ctypes.Structure):
             class _INPUT_UNION(ctypes.Union):
-                _fields_ = [("ki", KEYBDINPUT)]
+                _fields_ = [("mi", MOUSEINPUT), ("ki", KEYBDINPUT)]
 
             _fields_ = [
                 ("type", wintypes.DWORD),

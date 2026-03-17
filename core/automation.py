@@ -54,6 +54,7 @@ class AutomationEngine:
         self._pause_event = threading.Event()
         self._pause_event.set()  # Not paused by default
 
+        self._state_lock = threading.Lock()
         self.recognizer = ImageRecognition()
         self.input = None
         self.telegram = TelegramNotifier(
@@ -222,12 +223,15 @@ class AutomationEngine:
 
     def start(self):
         """Start automation in a new thread."""
-        if self.state == self.STATE_RUNNING:
-            self._log("Already running")
-            return
-        self._stop_event.clear()
-        self._pause_event.set()
-        self.state = self.STATE_RUNNING
+        with self._state_lock:
+            if self.state == self.STATE_RUNNING:
+                self._log("Already running")
+                return
+            self._stop_event.clear()
+            self._pause_event.set()
+            self.iteration_count = 0
+            self.current_step = 0
+            self.state = self.STATE_RUNNING
         thread = threading.Thread(target=self._run_loop, daemon=True)
         thread.start()
 
@@ -279,7 +283,7 @@ class AutomationEngine:
                     self._log("SUCCESS! MP 9 at Level 5 found!")
                     self._log(f"Stats: {self.stats.total_iterations} iterations, "
                               f"{self.stats.elapsed_str()} elapsed")
-                    self.telegram.send_message(
+                    self.telegram.send_message_async(
                         f"Lineage Bot: SUCCESS! Found MP 9 at Level 5. "
                         f"Iteration: {self.iteration_count}, "
                         f"Time: {self.stats.elapsed_str()}"

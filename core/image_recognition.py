@@ -35,6 +35,8 @@ class ImageRecognition:
         region: dict with x, y, w, h keys or None for full screen.
         Returns numpy array (BGR).
         """
+        if self.sct is None:
+            self.sct = mss.mss()
         if region:
             monitor = {
                 "left": region["x"],

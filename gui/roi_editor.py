@@ -53,7 +53,7 @@ class ROIEditor(tk.Toplevel):
         "item_slot": "item_icon",
         "scarecrow_search": "scarecrow",
         "exit_button": "exit_button",
-        "delete_button": "exit_button",
+        "delete_button": "delete_button",
         "delete_popup": "delete_popup",
     }
 
@@ -715,6 +715,8 @@ class ScreenRegionCapture(tk.Toplevel):
         self.drag_start = (event.x, event.y)
 
     def _on_drag(self, event):
+        if self.drag_start is None:
+            return
         if self.drag_rect:
             self.canvas.delete(self.drag_rect)
         self.drag_rect = self.canvas.create_rectangle(

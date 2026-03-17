@@ -46,12 +46,12 @@ class MainWindow:
         if not log_cfg.get("enabled", True):
             return
         log_path = log_cfg.get("path", "bot.log")
-        file_handler = logging.FileHandler(log_path, encoding="utf-8")
-        file_handler.setLevel(logging.DEBUG)
-        file_handler.setFormatter(
+        self._file_handler = logging.FileHandler(log_path, encoding="utf-8")
+        self._file_handler.setLevel(logging.DEBUG)
+        self._file_handler.setFormatter(
             logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
         )
-        logging.getLogger().addHandler(file_handler)
+        logging.getLogger().addHandler(self._file_handler)
 
     def _init_hotkeys(self):
         """Initialize global hotkeys."""
@@ -781,7 +781,7 @@ class MainWindow:
         canvas = tk.Canvas(preview, width=disp.width, height=disp.height)
         canvas.pack()
         canvas.create_image(0, 0, anchor=tk.NW, image=photo)
-        canvas._photo = photo  # prevent GC
+        preview._photo = photo  # prevent GC
 
         self.window_status_var.set(
             f"Captured: \"{windows[0][1]}\" ({rect['w']}x{rect['h']})")
@@ -1007,6 +1007,8 @@ class MainWindow:
         self._apply_ui_to_config()
         save_config(self.config)
 
+        if self.engine:
+            self.engine.stop()
         self.engine = AutomationEngine(self.config, log_callback=self._log_callback)
         self.engine.start()
 
@@ -1057,20 +1059,28 @@ class MainWindow:
             ):
                 self.root.after(500, self._update_status)
             elif self.engine.state == AutomationEngine.STATE_SUCCESS:
-                self.status_var.set("SUCCESS! MP 9 found at Level 5!")
                 self._refresh_stats()
                 self._stop_automation()
+                self.status_var.set("SUCCESS! MP 9 found at Level 5!")
             elif self.engine.state == AutomationEngine.STATE_STOPPED:
                 self._refresh_stats()
                 self._stop_automation()
+            else:
+                # Unknown/transient state - keep polling
+                self.root.after(500, self._update_status)
 
     def _on_close(self):
-        if self.engine and self.engine.state == AutomationEngine.STATE_RUNNING:
+        if self.engine and self.engine.state in (
+            AutomationEngine.STATE_RUNNING, AutomationEngine.STATE_PAUSED,
+        ):
             if not messagebox.askyesno("Confirm", "Automation is running. Stop and exit?"):
                 return
             self.engine.stop()
         if self.hotkey_manager:
             self.hotkey_manager.stop()
+        if hasattr(self, '_file_handler') and self._file_handler:
+            logging.getLogger().removeHandler(self._file_handler)
+            self._file_handler.close()
         self._apply_ui_to_config()
         save_config(self.config)
         self.root.destroy()

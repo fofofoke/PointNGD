@@ -3,6 +3,7 @@ import sys
 import subprocess
 
 import mss
+import numpy as np
 from PIL import Image
 
 
@@ -42,8 +43,17 @@ def get_window_rect(window_id):
 def capture_window(window_id):
     """Capture the target window client area.
 
+    Uses platform-specific APIs (PrintWindow on Windows) to capture the
+    window content directly, even when another window is on top of it.
+
     Returns (PIL.Image, rect_dict) or (None, None).
     """
+    if sys.platform == "win32":
+        result = _capture_window_win32_direct(window_id)
+        if result[0] is not None:
+            return result
+
+    # Fallback: screen capture at window coordinates (may capture overlapping windows)
     rect = get_window_rect(window_id)
     if not rect or rect["w"] <= 0 or rect["h"] <= 0:
         return None, None
@@ -55,6 +65,42 @@ def capture_window(window_id):
         screenshot = sct.grab(monitor)
         img = Image.frombytes("RGB", screenshot.size, screenshot.rgb)
     return img, rect
+
+
+def capture_window_region(window_id, roi):
+    """Capture a window-relative ROI region from the target window.
+
+    This captures the window content directly (not the screen), then crops
+    to the specified ROI.
+
+    Args:
+        window_id: Target window handle/id.
+        roi: dict with x, y, w, h (window-relative coordinates).
+
+    Returns (PIL.Image, abs_roi_dict) or (None, None).
+    abs_roi_dict has absolute screen coordinates for the ROI.
+    """
+    img, rect = capture_window(window_id)
+    if img is None or rect is None:
+        return None, None
+
+    x, y, w, h = roi["x"], roi["y"], roi["w"], roi["h"]
+    # Clamp to image bounds
+    x2 = min(x + w, img.width)
+    y2 = min(y + h, img.height)
+    x = max(0, x)
+    y = max(0, y)
+    if x2 <= x or y2 <= y:
+        return None, None
+
+    cropped = img.crop((x, y, x2, y2))
+    abs_roi = {
+        "x": rect["x"] + x,
+        "y": rect["y"] + y,
+        "w": x2 - x,
+        "h": y2 - y,
+    }
+    return cropped, abs_roi
 
 
 def capture_window_by_title(title_substring):
@@ -126,6 +172,88 @@ def _get_rect_win32(hwnd):
         "w": client_rect.right,
         "h": client_rect.bottom,
     }
+
+
+def _capture_window_win32_direct(hwnd):
+    """Capture window content using Win32 PrintWindow API.
+
+    PrintWindow asks the window to paint itself into a memory DC, so it
+    captures the correct content even when another window is on top.
+
+    Returns (PIL.Image, rect_dict) or (None, None).
+    """
+    import ctypes
+
+    rect = _get_rect_win32(hwnd)
+    if not rect or rect["w"] <= 0 or rect["h"] <= 0:
+        return None, None
+
+    w, h = rect["w"], rect["h"]
+    hwnd_int = int(hwnd)
+
+    user32 = ctypes.windll.user32
+    gdi32 = ctypes.windll.gdi32
+
+    # Create compatible DC and bitmap
+    wnd_dc = user32.GetDC(hwnd_int)
+    if not wnd_dc:
+        return None, None
+
+    mem_dc = gdi32.CreateCompatibleDC(wnd_dc)
+    bitmap = gdi32.CreateCompatibleBitmap(wnd_dc, w, h)
+    old_bitmap = gdi32.SelectObject(mem_dc, bitmap)
+
+    # PrintWindow with PW_CLIENTONLY captures client area content.
+    # PW_RENDERFULLCONTENT (0x2, Windows 8.1+) ensures DX/composited
+    # content is included.
+    PW_CLIENTONLY = 0x1
+    PW_RENDERFULLCONTENT = 0x2
+    success = user32.PrintWindow(hwnd_int, mem_dc,
+                                 PW_CLIENTONLY | PW_RENDERFULLCONTENT)
+    if not success:
+        # Retry without PW_RENDERFULLCONTENT for older Windows versions
+        success = user32.PrintWindow(hwnd_int, mem_dc, PW_CLIENTONLY)
+
+    if not success:
+        gdi32.SelectObject(mem_dc, old_bitmap)
+        gdi32.DeleteObject(bitmap)
+        gdi32.DeleteDC(mem_dc)
+        user32.ReleaseDC(hwnd_int, wnd_dc)
+        return None, None
+
+    # Read bitmap pixel data
+    class BITMAPINFOHEADER(ctypes.Structure):
+        _fields_ = [
+            ("biSize", ctypes.c_uint32), ("biWidth", ctypes.c_int32),
+            ("biHeight", ctypes.c_int32), ("biPlanes", ctypes.c_uint16),
+            ("biBitCount", ctypes.c_uint16), ("biCompression", ctypes.c_uint32),
+            ("biSizeImage", ctypes.c_uint32), ("biXPelsPerMeter", ctypes.c_int32),
+            ("biYPelsPerMeter", ctypes.c_int32), ("biClrUsed", ctypes.c_uint32),
+            ("biClrImportant", ctypes.c_uint32),
+        ]
+
+    bmi = BITMAPINFOHEADER()
+    bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+    bmi.biWidth = w
+    bmi.biHeight = -h  # negative = top-down row order
+    bmi.biPlanes = 1
+    bmi.biBitCount = 32
+    bmi.biCompression = 0  # BI_RGB
+
+    buf = ctypes.create_string_buffer(w * h * 4)
+    gdi32.GetDIBits(mem_dc, bitmap, 0, h, buf, ctypes.byref(bmi), 0)
+
+    # Cleanup GDI resources
+    gdi32.SelectObject(mem_dc, old_bitmap)
+    gdi32.DeleteObject(bitmap)
+    gdi32.DeleteDC(mem_dc)
+    user32.ReleaseDC(hwnd_int, wnd_dc)
+
+    # Convert BGRA buffer to RGB PIL Image
+    arr = np.frombuffer(buf, dtype=np.uint8).reshape(h, w, 4)
+    img = Image.fromarray(arr[:, :, [2, 1, 0]], "RGB")
+
+    return img, rect
 
 
 # ---------------------------------------------------------------------------

@@ -6,7 +6,7 @@ import os
 import shutil
 
 from core.image_recognition import ImageRecognition
-from gui.window_utils import find_windows_by_title, get_window_rect
+from gui.window_utils import find_windows_by_title, get_window_rect, capture_window_region
 
 
 class ScarecrowEditor(tk.Toplevel):
@@ -48,6 +48,25 @@ class ScarecrowEditor(tk.Toplevel):
                 result["x"] = roi["x"] + rect["x"]
                 result["y"] = roi["y"] + rect["y"]
         return result
+
+    def _capture_roi_from_window(self, roi):
+        """Capture a window-relative ROI directly from the target window.
+
+        Uses PrintWindow (on Windows) so the capture is correct even when
+        another window (including this editor) overlaps the target.
+
+        Returns a BGR numpy array suitable for ImageRecognition methods,
+        or None if capture failed.
+        """
+        if not self._window_id:
+            return None
+        import cv2
+        import numpy as np
+        pil_img, _abs_roi = capture_window_region(self._window_id, roi)
+        if pil_img is None:
+            return None
+        rgb = np.array(pil_img)
+        return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
 
     def _build_ui(self):
         # === Top: title ===
@@ -259,20 +278,24 @@ class ScarecrowEditor(tk.Toplevel):
             messagebox.showwarning("Warning",
                                    "Set the 'Scarecrow Search Area' ROI first.")
             return
-        import mss
-        import time
-        self.withdraw()
-        self.update()
-        time.sleep(0.5)
 
-        # Convert window-relative ROI to absolute for capture
-        abs_roi = self._abs_roi(roi)
-        with mss.mss() as sct:
-            monitor = {"left": abs_roi["x"], "top": abs_roi["y"],
-                       "width": abs_roi["w"], "height": abs_roi["h"]}
-            grab = sct.grab(monitor)
-            img = Image.frombytes("RGB", grab.size, grab.rgb)
-        self.deiconify()
+        # Capture ROI directly from target window (not the screen)
+        from gui.window_utils import capture_window_region
+        pil_img, _ = capture_window_region(self._window_id, roi) if self._window_id else (None, None)
+        if pil_img is None:
+            # Fallback: screen capture with editor hidden
+            import mss
+            import time
+            self.withdraw()
+            self.update()
+            time.sleep(0.5)
+            abs_roi = self._abs_roi(roi)
+            with mss.mss() as sct:
+                monitor = {"left": abs_roi["x"], "top": abs_roi["y"],
+                           "width": abs_roi["w"], "height": abs_roi["h"]}
+                grab = sct.grab(monitor)
+                pil_img = Image.frombytes("RGB", grab.size, grab.rgb)
+            self.deiconify()
 
         # Let user crop the scarecrow from the captured ROI
         messagebox.showinfo("Info",
@@ -320,12 +343,17 @@ class ScarecrowEditor(tk.Toplevel):
                             "then click OK. The median color will be sampled.")
 
         abs_roi = self._abs_roi(roi)
-        # Hide editor so we capture the target window, not ourselves
-        self.withdraw()
-        self.update()
-        import time; time.sleep(0.3)
-        result = self.recognizer.sample_hsv_from_region(abs_roi)
-        self.deiconify()
+        # Capture directly from target window (no need to hide editor)
+        bgr_img = self._capture_roi_from_window(roi)
+        if bgr_img is not None:
+            result = self.recognizer.sample_hsv_from_region(abs_roi, image=bgr_img)
+        else:
+            # Fallback: hide editor and capture from screen
+            self.withdraw()
+            self.update()
+            import time; time.sleep(0.3)
+            result = self.recognizer.sample_hsv_from_region(abs_roi)
+            self.deiconify()
         self.hsv_vars["h_min"].set(result["h_min"])
         self.hsv_vars["h_max"].set(result["h_max"])
         self.hsv_vars["s_min"].set(result["s_min"])
@@ -348,12 +376,19 @@ class ScarecrowEditor(tk.Toplevel):
 
         abs_roi = self._abs_roi(roi)
         hsv_range = self._get_hsv_range()
-        # Hide editor so we capture the target window, not ourselves
-        self.withdraw()
-        self.update()
-        import time; time.sleep(0.3)
-        masked_img, pixel_count = self.recognizer.preview_hsv_mask(abs_roi, hsv_range)
-        self.deiconify()
+        # Capture directly from target window (no need to hide editor)
+        bgr_img = self._capture_roi_from_window(roi)
+        if bgr_img is not None:
+            masked_img, pixel_count = self.recognizer.preview_hsv_mask(
+                abs_roi, hsv_range, image=bgr_img)
+        else:
+            # Fallback: hide editor and capture from screen
+            self.withdraw()
+            self.update()
+            import time; time.sleep(0.3)
+            masked_img, pixel_count = self.recognizer.preview_hsv_mask(
+                abs_roi, hsv_range)
+            self.deiconify()
 
         cw = self.hsv_preview_canvas.winfo_width() or 400
         ch = self.hsv_preview_canvas.winfo_height() or 200
@@ -386,14 +421,19 @@ class ScarecrowEditor(tk.Toplevel):
         hsv_range = self._get_hsv_range() if self.hsv_enabled_var.get() else None
 
         abs_roi = self._abs_roi(roi)
-        # Hide editor so we capture the target window, not ourselves
-        self.withdraw()
-        self.update()
-        import time; time.sleep(0.3)
-        found, ax, ay, conf, idx = self.recognizer.find_scarecrow(
-            abs_roi, templates, hsv_range
-        )
-        self.deiconify()
+        # Capture directly from target window (no need to hide editor)
+        bgr_img = self._capture_roi_from_window(roi)
+        if bgr_img is not None:
+            found, ax, ay, conf, idx = self.recognizer.find_scarecrow(
+                abs_roi, templates, hsv_range, image=bgr_img)
+        else:
+            # Fallback: hide editor and capture from screen
+            self.withdraw()
+            self.update()
+            import time; time.sleep(0.3)
+            found, ax, ay, conf, idx = self.recognizer.find_scarecrow(
+                abs_roi, templates, hsv_range)
+            self.deiconify()
 
         if found:
             method = f"template #{idx+1}" if idx >= 0 else "HSV fallback"

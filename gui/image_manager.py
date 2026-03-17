@@ -21,7 +21,6 @@ class ImageManager(tk.Toplevel):
         "item_icon": "Item Icon (Inventory)",
         "popup_text": "Popup Text Image",
         "scarecrow": "Scarecrow Image",
-        "level_up_effect": "Level-Up Effect Image",
         "exit_button": "Exit Confirm Button",
         "delete_popup": "Delete Confirmation Popup",
         "death_screen": "Death Screen Image (HP=0)",
@@ -252,7 +251,6 @@ class ImageManager(tk.Toplevel):
         "item_icon": "item_slot",
         "popup_text": "popup_text",
         "scarecrow": "scarecrow_search",
-        "level_up_effect": "level_display",
         "exit_button": "exit_button",
         "delete_popup": "delete_popup",
     }

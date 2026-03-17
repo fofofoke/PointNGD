@@ -400,20 +400,6 @@ class MainWindow:
         ttk.Entry(logpath_row, textvariable=self.logfile_path_var, width=25).pack(
             side=tk.LEFT, padx=5)
 
-        # Level Check Method
-        level_frame = ttk.LabelFrame(scroll_frame, text="Level Check Method")
-        level_frame.pack(fill=tk.X, padx=10, pady=5)
-
-        self.level_method_var = tk.StringVar(value="both")
-        for text, val in [
-            ("OCR Only", "ocr"),
-            ("Image Detection Only", "image"),
-            ("Both (Recommended)", "both"),
-        ]:
-            ttk.Radiobutton(level_frame, text=text, variable=self.level_method_var, value=val).pack(
-                anchor=tk.W, padx=10, pady=2
-            )
-
         # Telegram Settings
         tg_frame = ttk.LabelFrame(scroll_frame, text="Telegram Notification")
         tg_frame.pack(fill=tk.X, padx=10, pady=5)
@@ -883,7 +869,6 @@ class MainWindow:
 
         self.config["telegram_bot_token"] = self.tg_token_var.get()
         self.config["telegram_chat_id"] = self.tg_chat_var.get()
-        self.config["level_check_method"] = self.level_method_var.get()
         try:
             self.config["scarecrow_click_delay"] = float(self.scarecrow_delay_var.get())
         except ValueError:
@@ -952,7 +937,6 @@ class MainWindow:
 
         self.tg_token_var.set(self.config.get("telegram_bot_token", ""))
         self.tg_chat_var.set(self.config.get("telegram_chat_id", ""))
-        self.level_method_var.set(self.config.get("level_check_method", "both"))
         self.scarecrow_delay_var.set(str(self.config.get("scarecrow_click_delay", 0.5)))
         self.enter_wait_var.set(str(self.config.get("wait_after_enter_game", 5)))
         self.scarecrow_wait_var.set(str(self.config.get("wait_before_scarecrow", 3)))

@@ -146,15 +146,6 @@ class ImageRecognition:
             return int(digits)
         return None
 
-    def check_level_by_image(self, template_path, region=None):
-        """Check if level-up effect is visible on screen."""
-        if region:
-            screen = self.capture_screen(region)
-        else:
-            screen = self.capture_screen()
-        found, _, _, conf = self.find_template(screen, template_path)
-        return found
-
     def save_region_as_template(self, region, save_path):
         """Capture a screen region and save as a template image."""
         screen = self.capture_screen(region)

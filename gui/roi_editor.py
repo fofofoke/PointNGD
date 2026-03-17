@@ -478,7 +478,6 @@ class ROIEditor(tk.Toplevel):
         image_key_map = {
             "item_slot": "item_icon",
             "scarecrow_search": "scarecrow",
-            "level_display": "level_up_effect",
             "exit_button": "exit_button",
             "delete_button": "exit_button",
             "delete_popup": "delete_popup",

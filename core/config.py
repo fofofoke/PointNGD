@@ -11,7 +11,6 @@ DEFAULT_CONFIG = {
     "telegram_bot_token": "",
     "telegram_chat_id": "",
     "korean_input_method": "clipboard",  # "clipboard" or "sendinput"
-    "level_check_method": "both",  # "ocr", "image", "both"
     "scarecrow_click_delay": 0.5,
     "wait_after_enter_game": 5,
     "wait_before_scarecrow": 3,
@@ -53,7 +52,6 @@ DEFAULT_CONFIG = {
         "item_icon": "",
         "popup_text": "",
         "scarecrow": "",
-        "level_up_effect": "",
         "exit_button": "",
         "delete_popup": "",
         "death_screen": "",

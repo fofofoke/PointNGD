@@ -21,6 +21,15 @@ class ImageRecognition:
         self.sct = mss.mss()
         self.match_threshold = 0.8
 
+    def close(self):
+        """Close the screen capture resource."""
+        if self.sct:
+            self.sct.close()
+            self.sct = None
+
+    def __del__(self):
+        self.close()
+
     def capture_screen(self, region=None):
         """Capture screen or a specific region.
         region: dict with x, y, w, h keys or None for full screen.
@@ -136,15 +145,6 @@ class ImageRecognition:
         if digits:
             return int(digits)
         return None
-
-    def check_level_by_image(self, template_path, region=None):
-        """Check if level-up effect is visible on screen."""
-        if region:
-            screen = self.capture_screen(region)
-        else:
-            screen = self.capture_screen()
-        found, _, _, conf = self.find_template(screen, template_path)
-        return found
 
     def save_region_as_template(self, region, save_path):
         """Capture a screen region and save as a template image."""

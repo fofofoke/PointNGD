@@ -304,6 +304,8 @@ class AutomationEngine:
         finally:
             if self.input:
                 self.input.close()
+            if self.recognizer:
+                self.recognizer.close()
             # Save stats on finish
             try:
                 self.stats.save_to_file("stats.txt")
@@ -580,8 +582,6 @@ class AutomationEngine:
         """
         current_level = 1
         click_delay = self.config.get("scarecrow_click_delay", 0.5)
-        level_check_method = self.config.get("level_check_method", "both")
-        level_up_template = self.config["images"].get("level_up_effect", "")
 
         # Death recovery settings
         death_cfg = self.config.get("death_recovery", {})
@@ -627,7 +627,10 @@ class AutomationEngine:
         if features:
             self._log(f"Scarecrow detection: {' + '.join(features)}")
         else:
-            self._log("Warning: No scarecrow templates or HSV filter configured!", "warning")
+            self._log("Error: No scarecrow templates or HSV filter configured! "
+                       "Cannot proceed with scarecrow loop.", "error")
+            self._save_error_screenshot("no_scarecrow_config")
+            return "error"
 
         # Stuck detection settings
         stuck_cfg = self.config.get("stuck_detection", {})
@@ -772,27 +775,9 @@ class AutomationEngine:
                 last_level = cur_level
                 last_exp_img = cur_exp_img
 
-            # Check for level up
-            leveled_up = False
-
-            if level_check_method in ("image", "both") and level_up_template:
-                if self.recognizer.check_level_by_image(level_up_template):
-                    leveled_up = True
-
-            if level_check_method in ("ocr", "both"):
-                if cur_level is not None and cur_level > current_level:
-                    leveled_up = True
-                    current_level = cur_level
-
-            if leveled_up:
-                # Re-read level via OCR for accuracy (with retry)
-                prev_level = current_level
-                ocr_level = self._ocr_number_retry(level_region)
-                if ocr_level is not None:
-                    current_level = ocr_level
-                elif current_level == prev_level:
-                    # Only increment if OCR path didn't already update current_level
-                    current_level += 1
+            # Check for level up (OCR-based)
+            if cur_level is not None and cur_level > current_level:
+                current_level = cur_level
 
                 self._log(f"Level up detected! Current level: {current_level}")
                 self.stats.record_level_up(current_level, self.iteration_count)

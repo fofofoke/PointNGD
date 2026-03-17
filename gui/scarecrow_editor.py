@@ -239,7 +239,7 @@ class ScarecrowEditor(tk.Toplevel):
     def _add_from_screen(self):
         self.withdraw()
         self.update()
-        from gui.image_manager import ScreenRegionCapture
+        from gui.roi_editor import ScreenRegionCapture
         capturer = ScreenRegionCapture(
             self,
             window_id=self._window_id,
@@ -279,7 +279,7 @@ class ScarecrowEditor(tk.Toplevel):
                             "The full ROI was captured.\n"
                             "Now drag to select just the scarecrow in the next screen.")
         self.withdraw()
-        from gui.image_manager import ScreenRegionCapture
+        from gui.roi_editor import ScreenRegionCapture
         capturer = ScreenRegionCapture(
             self,
             window_id=self._window_id,

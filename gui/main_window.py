@@ -11,7 +11,6 @@ from core.automation import AutomationEngine
 from core.telegram_notifier import TelegramNotifier
 from core.hotkeys import HotkeyManager
 from gui.roi_editor import ROIEditor, ClickPositionEditor
-from gui.image_manager import ImageManager
 from gui.scarecrow_editor import ScarecrowEditor
 from gui.window_utils import find_windows_by_title, get_window_rect, capture_window
 
@@ -95,9 +94,8 @@ class MainWindow:
         menubar.add_cascade(label="Profiles", menu=profile_menu)
 
         tools_menu = tk.Menu(menubar, tearoff=0)
-        tools_menu.add_command(label="ROI Editor", command=self._open_roi_editor)
+        tools_menu.add_command(label="ROI & Image Editor", command=self._open_roi_editor)
         tools_menu.add_command(label="Click Position Editor", command=self._open_click_editor)
-        tools_menu.add_command(label="Image Manager", command=self._open_image_manager)
         tools_menu.add_separator()
         tools_menu.add_command(label="Scarecrow Detection Editor", command=self._open_scarecrow_editor)
         menubar.add_cascade(label="Tools", menu=tools_menu)
@@ -424,15 +422,12 @@ class MainWindow:
         quick_frame = ttk.LabelFrame(scroll_frame, text="Quick Setup")
         quick_frame.pack(fill=tk.X, padx=10, pady=5)
 
-        ttk.Button(quick_frame, text="Open ROI Editor", command=self._open_roi_editor).pack(
+        ttk.Button(quick_frame, text="Open ROI & Image Editor", command=self._open_roi_editor).pack(
             fill=tk.X, padx=10, pady=2
         )
         ttk.Button(
             quick_frame, text="Open Click Position Editor", command=self._open_click_editor
         ).pack(fill=tk.X, padx=10, pady=2)
-        ttk.Button(quick_frame, text="Open Image Manager", command=self._open_image_manager).pack(
-            fill=tk.X, padx=10, pady=2
-        )
         ttk.Button(quick_frame, text="Scarecrow Detection Editor",
                    command=self._open_scarecrow_editor).pack(fill=tk.X, padx=10, pady=2)
 
@@ -965,13 +960,6 @@ class MainWindow:
             save_config(self.config)
 
         ClickPositionEditor(self.root, self.config, on_save=on_save)
-
-    def _open_image_manager(self):
-        def on_save(cfg):
-            self.config.update(cfg)
-            save_config(self.config)
-
-        ImageManager(self.root, self.config, on_save=on_save)
 
     def _open_scarecrow_editor(self):
         def on_save(cfg):

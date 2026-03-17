@@ -1,16 +1,24 @@
-"""ROI (Region of Interest) editor with visual selection on screen capture."""
+"""Unified ROI & Image editor with visual selection on screen capture."""
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk, ImageDraw
 import mss
 import os
+import shutil
 import time
 
 from gui.window_utils import find_windows_by_title, get_window_rect, capture_window, list_all_windows
 
 
 class ROIEditor(tk.Toplevel):
-    """Visual ROI editor: capture screen and drag-select regions."""
+    """Unified ROI & Image editor.
+
+    - Drag on screenshot: first time captures template + sets ROI;
+      subsequent drags update ROI coordinates only (template kept).
+    - "Replace Image" buttons let the user explicitly overwrite the template.
+    - "Load from File" imports an external image as template.
+    - All changes auto-save to config.json via the on_save callback.
+    """
 
     ROI_LABELS = {
         "empty_slot": "Empty Slot (Character Select)",
@@ -40,9 +48,18 @@ class ROIEditor(tk.Toplevel):
         "mp_display", "exit_button", "delete_button", "delete_popup",
     }
 
+    # Map ROI key -> image config key (where names differ)
+    ROI_TO_IMAGE_KEY = {
+        "item_slot": "item_icon",
+        "scarecrow_search": "scarecrow",
+        "exit_button": "exit_button",
+        "delete_button": "exit_button",
+        "delete_popup": "delete_popup",
+    }
+
     def __init__(self, parent, config, images_dir="images", on_save=None):
         super().__init__(parent)
-        self.title("ROI Editor")
+        self.title("ROI & Image Editor")
         self.config = config
         self.images_dir = images_dir
         self.on_save = on_save
@@ -52,6 +69,7 @@ class ROIEditor(tk.Toplevel):
         self.drag_start = None
         self.drag_rect = None
         self.scale_factor = 1.0
+        self._preview_photo = None
         # Window-relative mode
         self._window_id = None
         self._window_rect = None  # {"x","y","w","h"} of target window on screen
@@ -60,6 +78,10 @@ class ROIEditor(tk.Toplevel):
         self.geometry("1200x800")
         self._resolve_target_window()
         self._build_ui()
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
 
     def _resolve_target_window(self):
         """Find the target window from config."""
@@ -71,13 +93,33 @@ class ROIEditor(tk.Toplevel):
             self._window_id = windows[0][0]
             self._window_rect = get_window_rect(self._window_id)
 
+    def _image_key_for(self, roi_key):
+        """Return the config['images'] key that corresponds to *roi_key*."""
+        return self.ROI_TO_IMAGE_KEY.get(roi_key, roi_key)
+
+    def _has_template(self, roi_key):
+        """Return True if a template image file exists for *roi_key*."""
+        image_key = self._image_key_for(roi_key)
+        path = self.config.get("images", {}).get(image_key, "")
+        return bool(path) and os.path.exists(path)
+
+    def _auto_save(self):
+        """Persist config to disk via the on_save callback."""
+        if self.on_save:
+            self.on_save(self.config)
+
+    # ------------------------------------------------------------------
+    # UI
+    # ------------------------------------------------------------------
+
     def _build_ui(self):
-        # Left panel: ROI list
-        left_frame = ttk.Frame(self, width=300)
+        # Left panel
+        left_frame = ttk.Frame(self, width=320)
         left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
         left_frame.pack_propagate(False)
 
-        ttk.Label(left_frame, text="ROI Regions", font=("", 12, "bold")).pack(pady=5)
+        ttk.Label(left_frame, text="ROI & Image Editor",
+                  font=("", 12, "bold")).pack(pady=5)
 
         # Window info
         win_title = self.config.get("target_window_title", "")
@@ -85,7 +127,7 @@ class ROIEditor(tk.Toplevel):
             status = "Found" if self._window_id else "NOT FOUND"
             ttk.Label(left_frame, text=f"Target: {win_title} [{status}]",
                       foreground="green" if self._window_id else "red",
-                      wraplength=280).pack(pady=2)
+                      wraplength=300).pack(pady=2)
         else:
             ttk.Label(left_frame, text="No target window (full screen mode)",
                       foreground="gray").pack(pady=2)
@@ -94,18 +136,15 @@ class ROIEditor(tk.Toplevel):
         self.roi_listbox = tk.Listbox(left_frame, font=("", 10))
         self.roi_listbox.pack(fill=tk.BOTH, expand=True, pady=5)
         self.roi_listbox.bind("<<ListboxSelect>>", self._on_roi_select)
-
-        for key, label in self.ROI_LABELS.items():
-            roi = self.config["roi"].get(key, {})
-            status = "SET" if roi.get("w", 0) > 10 else "---"
-            self.roi_listbox.insert(tk.END, f"[{status}] {label}")
+        self._refresh_listbox()
 
         # Current ROI info
         info_frame = ttk.LabelFrame(left_frame, text="Selected ROI")
         info_frame.pack(fill=tk.X, pady=5)
 
         self.roi_info_var = tk.StringVar(value="Select a ROI from the list")
-        ttk.Label(info_frame, textvariable=self.roi_info_var, wraplength=280).pack(padx=5, pady=5)
+        ttk.Label(info_frame, textvariable=self.roi_info_var,
+                  wraplength=300).pack(padx=5, pady=5)
 
         # Manual entry
         manual_frame = ttk.LabelFrame(left_frame, text="Manual Entry (window-relative)")
@@ -122,37 +161,40 @@ class ROIEditor(tk.Toplevel):
             )
             self.manual_vars[label[0].lower()] = var
 
-        ttk.Button(manual_frame, text="Apply Manual", command=self._apply_manual).pack(pady=5)
+        ttk.Button(manual_frame, text="Apply Manual",
+                   command=self._apply_manual).pack(pady=5)
 
-        # Capture as image section
-        capture_frame = ttk.LabelFrame(left_frame, text="Capture ROI as Image")
-        capture_frame.pack(fill=tk.X, pady=5)
+        # Template image section
+        img_frame = ttk.LabelFrame(left_frame, text="Template Image")
+        img_frame.pack(fill=tk.X, pady=5)
 
         ttk.Button(
-            capture_frame, text="Capture from Screenshot",
-            command=self._capture_roi_from_screenshot,
+            img_frame, text="Replace from Screenshot",
+            command=self._replace_image_from_screenshot,
         ).pack(fill=tk.X, padx=5, pady=2)
         ttk.Button(
-            capture_frame, text="Capture Live Screen",
-            command=self._capture_roi_live,
+            img_frame, text="Replace from Live Screen",
+            command=self._replace_image_live,
+        ).pack(fill=tk.X, padx=5, pady=2)
+        ttk.Button(
+            img_frame, text="Load from File...",
+            command=self._load_image_from_file,
         ).pack(fill=tk.X, padx=5, pady=2)
 
-        self.capture_preview_label = ttk.Label(capture_frame, text="")
-        self.capture_preview_label.pack(padx=5, pady=2)
+        self.preview_canvas = tk.Canvas(img_frame, bg="gray30",
+                                        height=80, width=280)
+        self.preview_canvas.pack(padx=5, pady=5)
+        self.preview_info_var = tk.StringVar(value="")
+        ttk.Label(img_frame, textvariable=self.preview_info_var,
+                  wraplength=300).pack(padx=5)
 
-        # Buttons
+        # Screen capture buttons
         btn_frame = ttk.Frame(left_frame)
         btn_frame.pack(fill=tk.X, pady=5)
-        ttk.Button(btn_frame, text="Capture Screen", command=self._capture_screen).pack(
-            fill=tk.X, pady=2
-        )
+        ttk.Button(btn_frame, text="Capture Screen",
+                   command=self._capture_screen).pack(fill=tk.X, pady=2)
         ttk.Button(btn_frame, text="Capture Window...",
-                   command=self._capture_selected_window).pack(
-            fill=tk.X, pady=2
-        )
-        ttk.Button(btn_frame, text="Save All ROIs", command=self._save_all).pack(
-            fill=tk.X, pady=2
-        )
+                   command=self._capture_selected_window).pack(fill=tk.X, pady=2)
 
         # Right panel: Screen capture display
         right_frame = ttk.Frame(self)
@@ -168,9 +210,42 @@ class ROIEditor(tk.Toplevel):
         self.status_var = tk.StringVar(value="Click 'Capture Screen' to start")
         ttk.Label(self, textvariable=self.status_var).pack(side=tk.BOTTOM, fill=tk.X)
 
+    # ------------------------------------------------------------------
+    # Listbox helpers
+    # ------------------------------------------------------------------
+
+    def _roi_status(self, key):
+        """Return a short status tag for the listbox entry."""
+        roi = self.config["roi"].get(key, {})
+        has_roi = roi.get("w", 0) > 10
+        has_img = self._has_template(key) if key in self.CAPTURABLE_ROIS else None
+
+        if has_img is None:
+            # Non-capturable ROI – only coordinate status matters
+            return "SET" if has_roi else "---"
+        if has_roi and has_img:
+            return "OK"
+        if has_roi:
+            return "ROI"
+        if has_img:
+            return "IMG"
+        return "---"
+
+    def _refresh_listbox(self):
+        sel = self.roi_listbox.curselection()
+        self.roi_listbox.delete(0, tk.END)
+        for key, label in self.ROI_LABELS.items():
+            tag = self._roi_status(key)
+            self.roi_listbox.insert(tk.END, f"[{tag}] {label}")
+        if sel:
+            self.roi_listbox.selection_set(sel[0])
+
+    # ------------------------------------------------------------------
+    # Screen capture
+    # ------------------------------------------------------------------
+
     def _capture_screen(self):
         """Capture the target window (requires a valid target window)."""
-        # Re-resolve in case window appeared or moved
         self._resolve_target_window()
         if not self._window_id:
             messagebox.showerror(
@@ -231,7 +306,6 @@ class ROIEditor(tk.Toplevel):
             messagebox.showerror("Error", "Failed to capture the selected window.")
             return
 
-        # Update window tracking so ROI coordinates are relative to this window
         self._window_id = wid
         self._window_rect = rect
         self.screenshot = img
@@ -281,6 +355,10 @@ class ROIEditor(tk.Toplevel):
         self.canvas.delete("all")
         self.canvas.create_image(0, 0, anchor=tk.NW, image=self.photo)
 
+    # ------------------------------------------------------------------
+    # ROI selection
+    # ------------------------------------------------------------------
+
     def _on_roi_select(self, event):
         selection = self.roi_listbox.curselection()
         if not selection:
@@ -297,6 +375,45 @@ class ROIEditor(tk.Toplevel):
         self.manual_vars["y"].set(str(roi.get("y", 0)))
         self.manual_vars["w"].set(str(roi.get("w", 0)))
         self.manual_vars["h"].set(str(roi.get("h", 0)))
+
+        # Show template preview
+        self._update_preview()
+
+    def _update_preview(self):
+        """Show the template image preview for the currently selected ROI."""
+        self.preview_canvas.delete("all")
+        self._preview_photo = None
+        if self.current_roi_key is None:
+            self.preview_info_var.set("")
+            return
+        if self.current_roi_key not in self.CAPTURABLE_ROIS:
+            self.preview_info_var.set("(no template for this ROI)")
+            return
+
+        image_key = self._image_key_for(self.current_roi_key)
+        path = self.config.get("images", {}).get(image_key, "")
+        if path and os.path.exists(path):
+            try:
+                img = Image.open(path)
+                cw = self.preview_canvas.winfo_width() or 280
+                ch = self.preview_canvas.winfo_height() or 80
+                scale = min(cw / img.width, ch / img.height, 1.0)
+                new_size = (max(1, int(img.width * scale)),
+                            max(1, int(img.height * scale)))
+                img = img.resize(new_size, Image.LANCZOS)
+                self._preview_photo = ImageTk.PhotoImage(img)
+                self.preview_canvas.create_image(
+                    cw // 2, ch // 2, anchor=tk.CENTER,
+                    image=self._preview_photo)
+                self.preview_info_var.set(f"{image_key}.png ({img.width}x{img.height})")
+            except Exception as e:
+                self.preview_info_var.set(f"Error: {e}")
+        else:
+            self.preview_info_var.set("No template image set")
+
+    # ------------------------------------------------------------------
+    # Drag: ROI setting (+ auto-capture on first time)
+    # ------------------------------------------------------------------
 
     def _on_drag_start(self, event):
         if self.current_roi_key is None:
@@ -349,28 +466,32 @@ class ROIEditor(tk.Toplevel):
         self.manual_vars["w"].set(str(real_w))
         self.manual_vars["h"].set(str(real_h))
 
-        # Update listbox
-        idx = list(self.ROI_LABELS.keys()).index(self.current_roi_key)
-        label = self.ROI_LABELS[self.current_roi_key]
-        self.roi_listbox.delete(idx)
-        self.roi_listbox.insert(idx, f"[SET] {label}")
-        self.roi_listbox.selection_set(idx)
-
-        # Auto-capture template image when ROI is set by drag
+        # Auto-capture template image ONLY when no template exists yet.
+        # If a template already exists, just update ROI coordinates.
         saved_msg = ""
         if self.screenshot and self.current_roi_key in self.CAPTURABLE_ROIS:
-            cropped = self.screenshot.crop((
-                real_x, real_y, real_x + real_w, real_y + real_h,
-            ))
-            self._save_captured_image(cropped)
-            saved_msg = " + template image saved"
+            if self._has_template(self.current_roi_key):
+                saved_msg = " (ROI only, template kept)"
+            else:
+                cropped = self.screenshot.crop((
+                    real_x, real_y, real_x + real_w, real_y + real_h,
+                ))
+                self._save_template_image(cropped)
+                saved_msg = " + template saved"
 
+        self._auto_save()
+        self._refresh_listbox()
+        self._update_preview()
         self.drag_start = None
         self._display_screenshot()
         self.status_var.set(
             f"ROI '{self.current_roi_key}' updated: {real_x},{real_y} "
             f"{real_w}x{real_h}{saved_msg}"
         )
+
+    # ------------------------------------------------------------------
+    # Manual ROI entry
+    # ------------------------------------------------------------------
 
     def _apply_manual(self):
         if self.current_roi_key is None:
@@ -386,22 +507,24 @@ class ROIEditor(tk.Toplevel):
             return
 
         self.config["roi"][self.current_roi_key] = {"x": x, "y": y, "w": w, "h": h}
-        idx = list(self.ROI_LABELS.keys()).index(self.current_roi_key)
-        label = self.ROI_LABELS[self.current_roi_key]
-        self.roi_listbox.delete(idx)
-        self.roi_listbox.insert(idx, f"[SET] {label}")
-        self.roi_listbox.selection_set(idx)
+        self._auto_save()
+        self._refresh_listbox()
         self._display_screenshot()
         self.status_var.set(f"ROI '{self.current_roi_key}' manually set")
 
-    def _save_all(self):
-        if self.on_save:
-            self.on_save(self.config)
-        self.status_var.set("All ROIs saved!")
-        messagebox.showinfo("Saved", "ROI settings saved successfully!")
+    # ------------------------------------------------------------------
+    # Template image: replace / load
+    # ------------------------------------------------------------------
 
-    def _capture_roi_from_screenshot(self):
-        """Crop the selected ROI from the already-captured screenshot and save as template image."""
+    def _save_template_image(self, image):
+        """Save a captured PIL image as the template for the current ROI key."""
+        image_key = self._image_key_for(self.current_roi_key)
+        dest = os.path.join(self.images_dir, f"{image_key}.png")
+        image.save(dest)
+        self.config.setdefault("images", {})[image_key] = dest
+
+    def _replace_image_from_screenshot(self):
+        """Crop the selected ROI from the stored screenshot and save as template."""
         if self.current_roi_key is None:
             messagebox.showwarning("Warning", "Select a ROI from the list first")
             return
@@ -409,7 +532,7 @@ class ROIEditor(tk.Toplevel):
             messagebox.showinfo("Info", "This ROI is not associated with a template image.")
             return
         if self.screenshot is None:
-            messagebox.showwarning("Warning", "Capture the screen first (click 'Capture Screen')")
+            messagebox.showwarning("Warning", "Capture the screen first")
             return
 
         roi = self.config["roi"].get(self.current_roi_key, {})
@@ -417,15 +540,20 @@ class ROIEditor(tk.Toplevel):
             messagebox.showwarning("Warning", "ROI is too small. Drag to set the region first.")
             return
 
-        # Crop from the stored screenshot (already window-relative)
         cropped = self.screenshot.crop((
             roi["x"], roi["y"],
             roi["x"] + roi["w"], roi["y"] + roi["h"],
         ))
-        self._save_captured_image(cropped)
+        self._save_template_image(cropped)
+        self._auto_save()
+        self._refresh_listbox()
+        self._update_preview()
+        self.status_var.set(
+            f"Template image replaced from screenshot for '{self.current_roi_key}'"
+        )
 
-    def _capture_roi_live(self):
-        """Capture the selected ROI region directly from the live screen."""
+    def _replace_image_live(self):
+        """Capture the ROI region from the live screen and save as template."""
         if self.current_roi_key is None:
             messagebox.showwarning("Warning", "Select a ROI from the list first")
             return
@@ -438,12 +566,10 @@ class ROIEditor(tk.Toplevel):
             messagebox.showwarning("Warning", "ROI is too small. Set the region first.")
             return
 
-        # Minimize window, capture live, restore
         self.withdraw()
         self.update()
         time.sleep(0.5)
 
-        # Convert window-relative ROI to absolute screen coords for capture
         self._resolve_target_window()
         if not self._window_id:
             self.deiconify()
@@ -470,31 +596,167 @@ class ROIEditor(tk.Toplevel):
             cropped = Image.frombytes("RGB", grab.size, grab.rgb)
 
         self.deiconify()
-        self._save_captured_image(cropped)
+        self._save_template_image(cropped)
+        self._auto_save()
+        self._refresh_listbox()
+        self._update_preview()
+        self.status_var.set(
+            f"Template image replaced from live screen for '{self.current_roi_key}'"
+        )
 
-    def _save_captured_image(self, image):
-        """Save a captured PIL image as the template for the current ROI key."""
-        # Map ROI key to image config key (some differ)
-        image_key_map = {
-            "item_slot": "item_icon",
-            "scarecrow_search": "scarecrow",
-            "exit_button": "exit_button",
-            "delete_button": "exit_button",
-            "delete_popup": "delete_popup",
-        }
-        image_key = image_key_map.get(self.current_roi_key, self.current_roi_key)
+    def _load_image_from_file(self):
+        """Load an external image file as the template for the selected ROI."""
+        if self.current_roi_key is None:
+            messagebox.showwarning("Warning", "Select a ROI from the list first")
+            return
+        if self.current_roi_key not in self.CAPTURABLE_ROIS:
+            messagebox.showinfo("Info", "This ROI is not associated with a template image.")
+            return
 
-        dest = os.path.join(self.images_dir, f"{image_key}.png")
-        image.save(dest)
+        filepath = filedialog.askopenfilename(
+            title=f"Select image for: {self.ROI_LABELS[self.current_roi_key]}",
+            filetypes=[("Images", "*.png *.jpg *.jpeg *.bmp"), ("All", "*.*")],
+        )
+        if not filepath:
+            return
+
+        image_key = self._image_key_for(self.current_roi_key)
+        ext = os.path.splitext(filepath)[1]
+        dest = os.path.join(self.images_dir, f"{image_key}{ext}")
+        shutil.copy2(filepath, dest)
         self.config.setdefault("images", {})[image_key] = dest
 
-        self.capture_preview_label.config(
-            text=f"Saved: {image_key}.png ({image.width}x{image.height})"
-        )
-        self.status_var.set(
-            f"ROI '{self.current_roi_key}' captured as template image -> {dest}"
+        self._auto_save()
+        self._refresh_listbox()
+        self._update_preview()
+        self.status_var.set(f"Loaded template from file for '{self.current_roi_key}'")
+
+
+# ======================================================================
+# ScreenRegionCapture  (used by ScarecrowEditor and others)
+# ======================================================================
+
+class ScreenRegionCapture(tk.Toplevel):
+    """Capture a screen region by dragging on the target window.
+
+    Requires a valid window_id.  The callback receives either:
+      callback(image, x, y, w, h)   -- when return_coords=True (default)
+      callback(image)               -- when return_coords=False (legacy)
+    where x, y, w, h are window-relative pixel coordinates of the selected region.
+    """
+
+    def __init__(self, parent, window_id=None, callback=None, return_coords=True):
+        super().__init__(parent)
+        self.callback = callback
+        self.return_coords = return_coords
+        self.drag_start = None
+        self.drag_rect = None
+        self._window_id = window_id
+        self._window_rect = None
+        self.scale_factor = 1.0
+
+        if window_id:
+            self._window_rect = get_window_rect(window_id)
+
+        if self._window_rect:
+            self._build_window_mode()
+        else:
+            messagebox.showerror(
+                "Error",
+                "Target window not found.\n"
+                "Please set target_window_title in settings and ensure the window is open.",
+            )
+            self.after(10, self._cancel)
+
+    def _build_window_mode(self):
+        """Capture from target window only."""
+        time.sleep(0.3)
+        img, rect = capture_window(self._window_id)
+        if img is None:
+            self._cancel()
+            return
+
+        self._window_rect = rect
+        self.full_image = img
+
+        with mss.mss() as sct:
+            scr_w = sct.monitors[1]["width"]
+            scr_h = sct.monitors[1]["height"]
+        max_w = int(scr_w * 0.85)
+        max_h = int(scr_h * 0.85)
+        self.scale_factor = min(max_w / img.width, max_h / img.height, 1.0)
+        disp_w = int(img.width * self.scale_factor)
+        disp_h = int(img.height * self.scale_factor)
+
+        self.title("Drag to select region (ESC to cancel)")
+        self.geometry(f"{disp_w}x{disp_h + 40}")
+        self.resizable(False, False)
+
+        label = ttk.Label(self,
+                          text="Drag to select a region on the target window. ESC to cancel.")
+        label.pack(pady=5)
+
+        self.canvas = tk.Canvas(self, width=disp_w, height=disp_h,
+                                bg="gray20", cursor="crosshair", highlightthickness=0)
+        self.canvas.pack()
+
+        display = img.resize((disp_w, disp_h), Image.LANCZOS)
+        self.photo = ImageTk.PhotoImage(display)
+        self.canvas.create_image(0, 0, anchor=tk.NW, image=self.photo)
+
+        self.canvas.bind("<ButtonPress-1>", self._on_start)
+        self.canvas.bind("<B1-Motion>", self._on_drag)
+        self.canvas.bind("<ButtonRelease-1>", self._on_end_window)
+        self.bind("<Escape>", lambda e: self._cancel())
+        self.focus_set()
+        self.grab_set()
+
+    def _on_start(self, event):
+        self.drag_start = (event.x, event.y)
+
+    def _on_drag(self, event):
+        if self.drag_rect:
+            self.canvas.delete(self.drag_rect)
+        self.drag_rect = self.canvas.create_rectangle(
+            self.drag_start[0], self.drag_start[1], event.x, event.y,
+            outline="lime", width=2,
         )
 
+    def _on_end_window(self, event):
+        """End drag in window mode - convert scaled coords to pixel coords."""
+        if self.drag_start is None:
+            return
+        x1 = min(self.drag_start[0], event.x)
+        y1 = min(self.drag_start[1], event.y)
+        x2 = max(self.drag_start[0], event.x)
+        y2 = max(self.drag_start[1], event.y)
+
+        px1 = int(x1 / self.scale_factor)
+        py1 = int(y1 / self.scale_factor)
+        px2 = int(x2 / self.scale_factor)
+        py2 = int(y2 / self.scale_factor)
+
+        if px2 - px1 > 5 and py2 - py1 > 5:
+            cropped = self.full_image.crop((px1, py1, px2, py2))
+            if self.callback:
+                if self.return_coords:
+                    self.callback(cropped, px1, py1, px2 - px1, py2 - py1)
+                else:
+                    self.callback(cropped)
+        self.destroy()
+
+    def _cancel(self):
+        if self.callback:
+            if self.return_coords:
+                self.callback(None, 0, 0, 0, 0)
+            else:
+                self.callback(None)
+        self.destroy()
+
+
+# ======================================================================
+# Supporting dialogs (unchanged)
+# ======================================================================
 
 class WindowSelectDialog(tk.Toplevel):
     """Dialog to list and select an active window for capture."""
@@ -514,12 +776,10 @@ class WindowSelectDialog(tk.Toplevel):
         ttk.Label(self, text="Select a window to capture:",
                   font=("", 11, "bold")).pack(padx=10, pady=(10, 5))
 
-        # Refresh button
         top_frame = ttk.Frame(self)
         top_frame.pack(fill=tk.X, padx=10)
         ttk.Button(top_frame, text="Refresh", command=self._refresh_list).pack(side=tk.RIGHT)
 
-        # Window list
         list_frame = ttk.Frame(self)
         list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
@@ -533,7 +793,6 @@ class WindowSelectDialog(tk.Toplevel):
 
         self.window_listbox.bind("<Double-1>", lambda e: self._on_select())
 
-        # Buttons
         btn_frame = ttk.Frame(self)
         btn_frame.pack(fill=tk.X, padx=10, pady=10)
         ttk.Button(btn_frame, text="Capture", command=self._on_select).pack(side=tk.LEFT, padx=5)
@@ -579,7 +838,6 @@ class ClickPositionEditor(tk.Toplevel):
         self.title("Click Position Editor")
         self.config = config
         self.on_save = on_save
-        # Window-relative mode
         self._window_id = None
         self._window_rect = None
         self._resolve_target_window()
@@ -598,7 +856,6 @@ class ClickPositionEditor(tk.Toplevel):
     def _build_ui(self):
         ttk.Label(self, text="Click Positions", font=("", 14, "bold")).pack(pady=10)
 
-        # Window info
         win_title = self.config.get("target_window_title", "")
         if win_title:
             status = "Found" if self._window_id else "NOT FOUND"
@@ -618,7 +875,6 @@ class ClickPositionEditor(tk.Toplevel):
         scroll_frame = ttk.Frame(self)
         scroll_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
-        # Keys stored at config top-level instead of click_positions
         self._toplevel_keys = {"character_center"}
 
         for key, label in self.POSITION_LABELS.items():
@@ -651,8 +907,6 @@ class ClickPositionEditor(tk.Toplevel):
         ttk.Button(self, text="Save All Positions", command=self._save_all).pack(pady=10)
 
     def _pick_position(self, key, x_var, y_var):
-        """Open the screen picker (window-aware)."""
-        # Re-resolve target window each time (it may have moved or appeared)
         self._resolve_target_window()
         if not self._window_id:
             messagebox.showwarning(
@@ -697,11 +951,7 @@ class ClickPositionEditor(tk.Toplevel):
 
 
 class ScreenPicker(tk.Toplevel):
-    """Pick a screen position on the target window.
-
-    Shows the target window capture and returns window-relative coordinates.
-    Requires a valid window_id.
-    """
+    """Pick a screen position on the target window."""
 
     def __init__(self, parent, window_id=None, callback=None):
         super().__init__(parent)
@@ -716,7 +966,6 @@ class ScreenPicker(tk.Toplevel):
         if self._window_rect:
             self._build_window_mode()
         else:
-            # No valid target window
             messagebox.showerror(
                 "Error",
                 "Target window not found.\n"
@@ -725,7 +974,6 @@ class ScreenPicker(tk.Toplevel):
             self.after(10, self.destroy)
 
     def _build_window_mode(self):
-        """Capture target window and let user click on the image."""
         time.sleep(0.3)
         img, rect = capture_window(self._window_id)
         if img is None:
@@ -735,7 +983,6 @@ class ScreenPicker(tk.Toplevel):
         self._window_rect = rect
         self._capture_img = img
 
-        # Size the picker window to fit image (max 85% of screen)
         with mss.mss() as sct:
             scr_w = sct.monitors[1]["width"]
             scr_h = sct.monitors[1]["height"]
@@ -768,7 +1015,6 @@ class ScreenPicker(tk.Toplevel):
         self.grab_set()
 
     def _on_click_window(self, event):
-        # Convert canvas coords back to window-relative pixel coords
         win_x = int(event.x / self.scale_factor)
         win_y = int(event.y / self.scale_factor)
         if self.callback:

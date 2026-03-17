@@ -271,6 +271,10 @@ class ImageManager(tk.Toplevel):
             }
             roi_msg = f" + ROI '{roi_key}' set ({x},{y} {w}x{h})"
 
+        # Auto-save config to disk (image path + ROI in one shot)
+        if self.on_save:
+            self.on_save(self.config)
+
         self._refresh_list()
         self._show_preview(dest)
         self.preview_info.set(f"Captured: {dest}{roi_msg}")

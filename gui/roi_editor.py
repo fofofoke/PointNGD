@@ -356,14 +356,31 @@ class ROIEditor(tk.Toplevel):
         self.roi_listbox.insert(idx, f"[SET] {label}")
         self.roi_listbox.selection_set(idx)
 
-        # Auto-capture template image when ROI is set by drag
+        # Auto-capture template image ONLY when no template exists yet.
+        # If a template already exists, just update ROI coordinates (independent adjust mode).
         saved_msg = ""
         if self.screenshot and self.current_roi_key in self.CAPTURABLE_ROIS:
-            cropped = self.screenshot.crop((
-                real_x, real_y, real_x + real_w, real_y + real_h,
-            ))
-            self._save_captured_image(cropped)
-            saved_msg = " + template image saved"
+            image_key_map = {
+                "item_slot": "item_icon",
+                "scarecrow_search": "scarecrow",
+                "exit_button": "exit_button",
+                "delete_button": "exit_button",
+                "delete_popup": "delete_popup",
+            }
+            image_key = image_key_map.get(self.current_roi_key, self.current_roi_key)
+            existing_path = self.config.get("images", {}).get(image_key, "")
+            if existing_path and os.path.exists(existing_path):
+                saved_msg = " (ROI coordinates only, template image kept)"
+            else:
+                cropped = self.screenshot.crop((
+                    real_x, real_y, real_x + real_w, real_y + real_h,
+                ))
+                self._save_captured_image(cropped)
+                saved_msg = " + template image saved"
+
+        # Auto-save config to disk
+        if self.on_save:
+            self.on_save(self.config)
 
         self.drag_start = None
         self._display_screenshot()
@@ -392,6 +409,11 @@ class ROIEditor(tk.Toplevel):
         self.roi_listbox.insert(idx, f"[SET] {label}")
         self.roi_listbox.selection_set(idx)
         self._display_screenshot()
+
+        # Auto-save config to disk
+        if self.on_save:
+            self.on_save(self.config)
+
         self.status_var.set(f"ROI '{self.current_roi_key}' manually set")
 
     def _save_all(self):

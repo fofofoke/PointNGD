@@ -20,6 +20,10 @@ class ImageRecognition:
     def __init__(self):
         self.match_threshold = 0.8
 
+    def close(self):
+        """Release any held resources."""
+        pass
+
     def capture_screen(self, region=None):
         """Capture screen or a specific region.
         region: dict with x, y, w, h keys or None for full screen.
@@ -170,6 +174,12 @@ class ImageRecognition:
             (found, abs_x, abs_y, best_confidence, matched_template_index)
         """
         threshold = threshold or self.match_threshold
+
+        # Fast path: nothing to search with
+        valid_templates = [t for t in (templates or []) if t and os.path.exists(t)]
+        if not valid_templates and not hsv_range:
+            return False, 0, 0, 0, -1
+
         screen = image if image is not None else self.capture_screen(region)
 
         # Origin in region-local coordinates

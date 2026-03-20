@@ -1,12 +1,31 @@
 """Image recognition engine: template matching, OCR, and screen capture."""
-import cv2
-import numpy as np
+import logging
+import os
+
+logger = logging.getLogger(__name__)
+
+try:
+    import cv2
+except ImportError:
+    cv2 = None
+    logger.warning("opencv-python not installed. Image recognition will be unavailable.")
+
+try:
+    import numpy as np
+except ImportError:
+    np = None
+    logger.warning("numpy not installed. Image recognition will be unavailable.")
+
 try:
     from PIL import Image
 except ImportError:
     Image = None
-import mss
-import os
+
+try:
+    import mss
+except ImportError:
+    mss = None
+    logger.warning("mss not installed. Screen capture will be unavailable.")
 
 try:
     import pytesseract

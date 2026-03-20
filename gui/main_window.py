@@ -7,12 +7,8 @@ import os
 
 from core.config import (load_config, save_config, list_profiles,
                           save_profile, load_profile, delete_profile)
-from core.automation import AutomationEngine
 from core.telegram_notifier import TelegramNotifier
 from core.hotkeys import HotkeyManager
-from gui.roi_editor import ROIEditor, ClickPositionEditor
-from gui.scarecrow_editor import ScarecrowEditor
-from gui.window_utils import find_windows_by_title, get_window_rect, capture_window
 
 
 class MainWindow:
@@ -67,12 +63,9 @@ class MainWindow:
 
     def _hotkey_start_resume(self):
         """Handle F9: start if idle, resume if paused."""
-        if self.engine and self.engine.state == AutomationEngine.STATE_PAUSED:
+        if self.engine and self.engine.state == "paused":
             self._resume_automation()
-        elif not self.engine or self.engine.state in (
-            AutomationEngine.STATE_IDLE, AutomationEngine.STATE_STOPPED,
-            AutomationEngine.STATE_SUCCESS,
-        ):
+        elif not self.engine or self.engine.state in ("idle", "stopped", "success"):
             self._start_automation()
 
     def _build_ui(self):
@@ -702,6 +695,7 @@ class MainWindow:
 
     def _find_target_window(self):
         """Search for windows matching the title and display results."""
+        from gui.window_utils import find_windows_by_title, get_window_rect
         title = self.target_window_var.get().strip()
         if not title:
             messagebox.showwarning("Warning", "Enter a window title substring first.")
@@ -749,6 +743,7 @@ class MainWindow:
 
     def _test_window_capture(self):
         """Capture the target window and show a preview."""
+        from gui.window_utils import find_windows_by_title, capture_window
         title = self.target_window_var.get().strip()
         if not title:
             messagebox.showwarning("Warning", "Enter a window title first.")
@@ -948,6 +943,7 @@ class MainWindow:
         self.status_var.set("Settings loaded!")
 
     def _open_roi_editor(self):
+        from gui.roi_editor import ROIEditor
         def on_save(cfg):
             self.config.update(cfg)
             save_config(self.config)
@@ -955,6 +951,7 @@ class MainWindow:
         ROIEditor(self.root, self.config, images_dir="images", on_save=on_save)
 
     def _open_click_editor(self):
+        from gui.roi_editor import ClickPositionEditor
         def on_save(cfg):
             self.config.update(cfg)
             save_config(self.config)
@@ -962,6 +959,7 @@ class MainWindow:
         ClickPositionEditor(self.root, self.config, on_save=on_save)
 
     def _open_scarecrow_editor(self):
+        from gui.scarecrow_editor import ScarecrowEditor
         def on_save(cfg):
             self.config.update(cfg)
             save_config(self.config)
@@ -1004,6 +1002,7 @@ class MainWindow:
         self.log_text.config(state=tk.DISABLED)
 
     def _start_automation(self):
+        from core.automation import AutomationEngine
         self._apply_ui_to_config()
         save_config(self.config)
 
@@ -1053,16 +1052,13 @@ class MainWindow:
             # Update stats display
             self._refresh_stats()
 
-            if self.engine.state in (
-                AutomationEngine.STATE_RUNNING,
-                AutomationEngine.STATE_PAUSED,
-            ):
+            if self.engine.state in ("running", "paused"):
                 self.root.after(500, self._update_status)
-            elif self.engine.state == AutomationEngine.STATE_SUCCESS:
+            elif self.engine.state == "success":
                 self._refresh_stats()
                 self._stop_automation()
                 self.status_var.set("SUCCESS! MP 9 found at Level 5!")
-            elif self.engine.state == AutomationEngine.STATE_STOPPED:
+            elif self.engine.state == "stopped":
                 self._refresh_stats()
                 self._stop_automation()
             else:
@@ -1070,9 +1066,7 @@ class MainWindow:
                 self.root.after(500, self._update_status)
 
     def _on_close(self):
-        if self.engine and self.engine.state in (
-            AutomationEngine.STATE_RUNNING, AutomationEngine.STATE_PAUSED,
-        ):
+        if self.engine and self.engine.state in ("running", "paused"):
             if not messagebox.askyesno("Confirm", "Automation is running. Stop and exit?"):
                 return
             self.engine.stop()

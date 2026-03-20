@@ -1,9 +1,17 @@
 """Scarecrow detection editor: multi-direction templates + HSV color tuning."""
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-from PIL import Image, ImageTk
 import os
 import shutil
+import logging
+
+logger = logging.getLogger(__name__)
+
+try:
+    from PIL import Image, ImageTk
+except ImportError:
+    Image = ImageTk = None
+    logger.warning("Pillow not installed. Scarecrow editor image features will be unavailable.")
 
 from core.image_recognition import ImageRecognition
 from gui.window_utils import find_windows_by_title, get_window_rect, capture_window_region

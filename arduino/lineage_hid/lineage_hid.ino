@@ -50,7 +50,9 @@ void loop() {
         inputBuffer = "";
       }
     } else {
-      inputBuffer += c;
+      if (inputBuffer.length() < 256) {
+        inputBuffer += c;
+      }
     }
   }
 }
@@ -58,37 +60,41 @@ void loop() {
 void processCommand(String cmd) {
   cmd.trim();
 
+  bool success;
+
   if (cmd.startsWith("CLICK ")) {
-    handleClick(cmd.substring(6), false);
+    success = handleClick(cmd.substring(6), false);
   }
   else if (cmd.startsWith("DBLCLICK ")) {
-    handleClick(cmd.substring(9), true);
+    success = handleClick(cmd.substring(9), true);
   }
   else if (cmd.startsWith("TYPE ")) {
-    handleType(cmd.substring(5));
+    success = handleType(cmd.substring(5));
   }
   else if (cmd.startsWith("KEY ")) {
-    handleKey(cmd.substring(4));
+    success = handleKey(cmd.substring(4));
   }
   else if (cmd.startsWith("HOTKEY ")) {
-    handleHotkey(cmd.substring(7));
+    success = handleHotkey(cmd.substring(7));
   }
   else if (cmd.startsWith("MOVE ")) {
-    handleMove(cmd.substring(5));
+    success = handleMove(cmd.substring(5));
   }
   else {
     Serial.println("ERR:UNKNOWN");
     return;
   }
 
-  Serial.println("OK");
+  if (success) {
+    Serial.println("OK");
+  }
 }
 
-void handleClick(String params, bool doubleClick) {
+bool handleClick(String params, bool doubleClick) {
   int spaceIdx = params.indexOf(' ');
   if (spaceIdx < 0) {
     Serial.println("ERR:PARAMS");
-    return;
+    return false;
   }
 
   int targetX = params.substring(0, spaceIdx).toInt();
@@ -102,31 +108,36 @@ void handleClick(String params, bool doubleClick) {
     delay(80);
     Mouse.click(MOUSE_LEFT);
   }
+  return true;
 }
 
-void handleType(String text) {
-  for (int i = 0; i < text.length(); i++) {
+bool handleType(String text) {
+  for (unsigned int i = 0; i < text.length(); i++) {
     Keyboard.write(text.charAt(i));
     delay(30);
   }
+  return true;
 }
 
-void handleKey(String keyName) {
+bool handleKey(String keyName) {
   uint8_t key = resolveKey(keyName);
-  if (key > 0) {
-    Keyboard.press(key);
-    delay(50);
-    Keyboard.release(key);
+  if (key == 0) {
+    Serial.println("ERR:UNKNOWN_KEY");
+    return false;
   }
+  Keyboard.press(key);
+  delay(50);
+  Keyboard.release(key);
+  return true;
 }
 
-void handleHotkey(String combo) {
+bool handleHotkey(String combo) {
   // Parse key1+key2+key3...
   uint8_t keys[4];
   int keyCount = 0;
 
   int start = 0;
-  while (start < combo.length() && keyCount < 4) {
+  while (start < (int)combo.length() && keyCount < 4) {
     int plusIdx = combo.indexOf('+', start);
     String keyStr;
     if (plusIdx < 0) {
@@ -143,6 +154,11 @@ void handleHotkey(String combo) {
     }
   }
 
+  if (keyCount == 0) {
+    Serial.println("ERR:NO_KEYS");
+    return false;
+  }
+
   // Press all keys
   for (int i = 0; i < keyCount; i++) {
     Keyboard.press(keys[i]);
@@ -154,16 +170,21 @@ void handleHotkey(String combo) {
     Keyboard.release(keys[i]);
     delay(30);
   }
+  return true;
 }
 
-void handleMove(String params) {
+bool handleMove(String params) {
   int spaceIdx = params.indexOf(' ');
-  if (spaceIdx < 0) return;
+  if (spaceIdx < 0) {
+    Serial.println("ERR:PARAMS");
+    return false;
+  }
 
   int targetX = params.substring(0, spaceIdx).toInt();
   int targetY = params.substring(spaceIdx + 1).toInt();
 
   moveMouseAbsolute(targetX, targetY);
+  return true;
 }
 
 void moveMouseAbsolute(int targetX, int targetY) {

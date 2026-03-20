@@ -37,19 +37,14 @@ class ROIEditor(tk.Toplevel):
         "empty_slot": "Empty Slot (Character Select)",
         "knight_icon": "Knight Icon (Class Selection)",
         "knight_verify": "Knight Verify Area",
-        "name_input": "Name Input Field",
         "confirm_button": "Confirm Button",
-        "character_slot": "Character Slot (Select Screen)",
-        "tab_area": "Tab Area",
         "item_slot": "Item Slot (Inventory)",
         "popup_text": "Popup Text Area",
         "scarecrow_search": "Scarecrow Search Area",
         "level_display": "Level Display Area",
         "mp_display": "MP Display Area",
         "exit_button": "Exit Button Area",
-        "delete_button": "Delete Button Area",
         "delete_popup": "Delete Popup Area",
-        "click_after_enter": "Click After Enter Game",
         "exp_display": "EXP Display Area (Stuck Detection)",
         "hp_display": "HP Display Area (Death Detection)",
     }
@@ -58,7 +53,7 @@ class ROIEditor(tk.Toplevel):
     CAPTURABLE_ROIS = {
         "empty_slot", "knight_icon", "knight_verify", "confirm_button",
         "item_slot", "popup_text", "scarecrow_search", "level_display",
-        "mp_display", "exit_button", "delete_button", "delete_popup",
+        "mp_display", "exit_button", "delete_popup",
     }
 
     # Map ROI key -> image config key (where names differ)
@@ -66,7 +61,6 @@ class ROIEditor(tk.Toplevel):
         "item_slot": "item_icon",
         "scarecrow_search": "scarecrow",
         "exit_button": "exit_button",
-        "delete_button": "delete_button",
         "delete_popup": "delete_popup",
     }
 
@@ -840,7 +834,6 @@ class ClickPositionEditor(tk.Toplevel):
         "knight_verify_click": "Knight Verify Click Position",
         "name_input_click": "Name Input Click Position",
         "character_slot_click": "Character Slot Click Position",
-        "tab_click": "Tab Click Position",
         "after_enter_click": "After Enter Game Click Position",
         "exit_confirm_click": "Exit Confirm Click Position",
         "delete_click": "Delete Button Click Position",

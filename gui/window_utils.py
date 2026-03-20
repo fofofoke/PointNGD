@@ -1,10 +1,27 @@
 """Utility for finding and capturing a target window by title."""
 import sys
 import subprocess
+import logging
 
-import mss
-import numpy as np
-from PIL import Image
+logger = logging.getLogger(__name__)
+
+try:
+    import mss
+except ImportError:
+    mss = None
+    logger.warning("mss not installed. Window capture will be unavailable.")
+
+try:
+    import numpy as np
+except ImportError:
+    np = None
+    logger.warning("numpy not installed. Window capture will be unavailable.")
+
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
+    logger.warning("Pillow not installed. Window capture will be unavailable.")
 
 
 def list_all_windows():
@@ -56,6 +73,9 @@ def capture_window(window_id):
     # Fallback: screen capture at window coordinates (may capture overlapping windows)
     rect = get_window_rect(window_id)
     if not rect or rect["w"] <= 0 or rect["h"] <= 0:
+        return None, None
+    if not mss:
+        logger.error("mss not installed, cannot capture window.")
         return None, None
     with mss.mss() as sct:
         monitor = {
@@ -250,6 +270,8 @@ def _capture_window_win32_direct(hwnd):
     user32.ReleaseDC(hwnd_int, wnd_dc)
 
     # Convert BGRA buffer to RGB PIL Image
+    if not np or not Image:
+        return None, None
     arr = np.frombuffer(buf, dtype=np.uint8).reshape(h, w, 4)
     img = Image.fromarray(arr[:, :, [2, 1, 0]], "RGB")
 

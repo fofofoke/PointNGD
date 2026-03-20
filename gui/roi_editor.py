@@ -1,11 +1,24 @@
 """Unified ROI & Image editor with visual selection on screen capture."""
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
-from PIL import Image, ImageTk, ImageDraw
-import mss
 import os
 import shutil
 import time
+import logging
+
+logger = logging.getLogger(__name__)
+
+try:
+    from PIL import Image, ImageTk, ImageDraw
+except ImportError:
+    Image = ImageTk = ImageDraw = None
+    logger.warning("Pillow not installed. ROI Editor image features will be unavailable.")
+
+try:
+    import mss
+except ImportError:
+    mss = None
+    logger.warning("mss not installed. Screen capture will be unavailable.")
 
 from gui.window_utils import find_windows_by_title, get_window_rect, capture_window, list_all_windows
 

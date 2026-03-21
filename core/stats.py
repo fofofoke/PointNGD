@@ -91,7 +91,7 @@ class StatsTracker:
         """Generate a human-readable summary."""
         lines = [
             "=" * 50,
-            "  Lineage Bot - Statistics Report",
+            "  LC AB - Statistics Report",
             f"  Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
             "=" * 50,
             "",

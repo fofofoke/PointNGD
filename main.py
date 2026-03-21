@@ -1,4 +1,4 @@
-"""Entry point for Lineage Classic Automation Bot."""
+"""Entry point for LC AB."""
 import sys
 import os
 

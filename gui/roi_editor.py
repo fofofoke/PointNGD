@@ -96,6 +96,11 @@ class ROIEditor(tk.Toplevel):
         if not title:
             return
         windows = find_windows_by_title(title)
+        # Exclude our own windows to avoid capturing the bot UI
+        own_titles = ("LC AB", "Scarecrow Detection Editor",
+                      "ROI & Image Editor", "Click Position Editor")
+        windows = [(wid, wtitle) for wid, wtitle in windows
+                   if not wtitle.startswith(own_titles)]
         if windows:
             self._window_id = windows[0][0]
             self._window_rect = get_window_rect(self._window_id)

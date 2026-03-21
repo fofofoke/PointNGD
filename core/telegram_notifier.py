@@ -43,4 +43,4 @@ class TelegramNotifier:
 
     def test_connection(self):
         """Send a test message to verify configuration."""
-        return self.send_message("Lineage Bot: Test connection successful!")
+        return self.send_message("LC AB: Test connection successful!")

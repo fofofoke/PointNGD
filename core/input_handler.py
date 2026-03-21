@@ -203,6 +203,60 @@ class SoftwareInput(InputHandler):
         self.pyautogui.moveTo(x, y)
 
 
+def _get_linux_screen_size():
+    """Detect screen resolution on Linux. Returns (width, height)."""
+    # Try xdpyinfo first (most reliable for total screen area)
+    try:
+        out = subprocess.check_output(
+            ["xdpyinfo"], stderr=subprocess.DEVNULL
+        ).decode()
+        for line in out.splitlines():
+            if "dimensions:" in line:
+                # e.g. "  dimensions:    3840x2160 pixels ..."
+                dim = line.split()[1]
+                w, h = dim.split("x")
+                logger.info("Screen size from xdpyinfo: %sx%s", w, h)
+                return int(w), int(h)
+    except Exception:
+        pass
+    # Try xrandr (look for current mode)
+    try:
+        out = subprocess.check_output(
+            ["xrandr", "--current"], stderr=subprocess.DEVNULL
+        ).decode()
+        for line in out.splitlines():
+            if " connected " in line and "+" in line:
+                # e.g. "DP-1 connected 3840x2160+0+0 ..."
+                for part in line.split():
+                    if "x" in part and "+" in part:
+                        res = part.split("+")[0]
+                        w, h = res.split("x")
+                        logger.info("Screen size from xrandr: %sx%s", w, h)
+                        return int(w), int(h)
+    except Exception:
+        pass
+    # Try pyautogui
+    try:
+        import pyautogui
+        w, h = pyautogui.size()
+        logger.info("Screen size from pyautogui: %dx%d", w, h)
+        return w, h
+    except Exception:
+        pass
+    # Try python-mss
+    try:
+        import mss
+        with mss.mss() as sct:
+            # monitors[0] is the virtual screen (all monitors combined)
+            mon = sct.monitors[0]
+            logger.info("Screen size from mss: %dx%d", mon["width"], mon["height"])
+            return mon["width"], mon["height"]
+    except Exception:
+        pass
+    logger.warning("Could not detect screen size, defaulting to 1920x1080")
+    return 1920, 1080
+
+
 class ArduinoInput(InputHandler):
     """Arduino Leonardo-based HID input via serial communication.
 
@@ -253,7 +307,7 @@ class ArduinoInput(InputHandler):
                 height = user32.GetSystemMetrics(79)     # SM_CYVIRTUALSCREEN
             else:
                 origin_x, origin_y = 0, 0
-                width, height = 1920, 1080
+                width, height = _get_linux_screen_size()
 
             self._send(f"SCREEN {origin_x} {origin_y} {width} {height}")
             logger.info(

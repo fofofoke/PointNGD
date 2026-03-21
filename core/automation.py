@@ -200,11 +200,36 @@ class AutomationEngine:
         """
         self._focus_and_validate(x, y, skip_focus)
         self.input.click(x, y)
+        self._verify_cursor(x, y)
 
     def _double_click(self, x, y, *, skip_focus=False):
         """Double-click at absolute screen coordinates (x, y)."""
         self._focus_and_validate(x, y, skip_focus)
         self.input.double_click(x, y)
+        self._verify_cursor(x, y)
+
+    def _verify_cursor(self, expected_x, expected_y):
+        """Check where the cursor actually ended up and warn if it differs."""
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+            class POINT(ctypes.Structure):
+                _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+            pt = POINT()
+            ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+            if abs(pt.x - expected_x) > 2 or abs(pt.y - expected_y) > 2:
+                self._log(
+                    f"CURSOR MISMATCH: intended ({expected_x},{expected_y}) "
+                    f"but cursor is at ({pt.x},{pt.y}) — "
+                    f"delta=({pt.x - expected_x},{pt.y - expected_y}). "
+                    f"Possible DPI scaling issue with pyautogui.",
+                    "warning",
+                )
+            else:
+                logger.debug("Cursor confirmed at (%d,%d)", pt.x, pt.y)
+        except Exception:
+            pass
 
     def _focus_and_validate(self, x, y, skip_focus):
         """Shared logic for _click/_double_click."""

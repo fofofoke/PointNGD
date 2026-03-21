@@ -456,6 +456,11 @@ class AutomationEngine:
         """
         found, x, y = self._wait_and_find(image_key, region_key, timeout=timeout)
         if found:
+            action = "double-click" if double else "click"
+            self._log(
+                f"Found '{image_key}' -> {action} at ({x}, {y}) "
+                f"[win_offset=({self._win_offset_x}, {self._win_offset_y})]"
+            )
             if double:
                 self.input.double_click(x, y)
             else:

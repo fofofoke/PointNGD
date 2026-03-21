@@ -1,6 +1,7 @@
 """Main automation workflow engine for LC AB."""
 import math
 import os
+import sys
 import time
 import logging
 import threading
@@ -13,6 +14,31 @@ from core.stats import StatsTracker
 from gui.window_utils import find_windows_by_title, get_window_rect
 
 logger = logging.getLogger(__name__)
+
+
+def _set_foreground_window(hwnd):
+    """Bring the target window to the foreground (Windows only).
+
+    Tries SetForegroundWindow first, falls back to simulating an Alt
+    key press (which satisfies the OS foreground-lock policy) and
+    retrying.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        # First attempt
+        if user32.SetForegroundWindow(int(hwnd)):
+            return
+        # OS may block SetForegroundWindow unless the calling thread
+        # owns the foreground lock.  A brief Alt press/release is the
+        # standard workaround.
+        user32.keybd_event(0x12, 0, 0, 0)       # Alt down
+        user32.keybd_event(0x12, 0, 0x0002, 0)  # Alt up
+        user32.SetForegroundWindow(int(hwnd))
+    except Exception:
+        pass
 
 
 class AutomationEngine:
@@ -117,6 +143,7 @@ class AutomationEngine:
         if not title:
             self._win_offset_x = 0
             self._win_offset_y = 0
+            logger.debug("No target window title set, using offset (0, 0)")
             return True
         windows = find_windows_by_title(title)
         if not windows:
@@ -129,6 +156,11 @@ class AutomationEngine:
             return False
         self._win_offset_x = rect["x"]
         self._win_offset_y = rect["y"]
+        logger.debug(
+            "Window refresh: hwnd=%s title='%s' rect=(%d,%d %dx%d)",
+            self._target_window_id, windows[0][1],
+            rect["x"], rect["y"], rect["w"], rect["h"],
+        )
         return True
 
     def _abs_roi(self, roi):
@@ -151,15 +183,69 @@ class AutomationEngine:
             "y": pos["y"] + self._win_offset_y,
         }
 
+    # ------------------------------------------------------------------
+    # Centralised click helpers – every click in the bot flows through
+    # these two methods so that:
+    #   1. The window position is refreshed right before the click.
+    #   2. The game window is brought to the foreground.
+    #   3. The final coordinates are validated and logged.
+    # ------------------------------------------------------------------
+
+    def _click(self, x, y, *, skip_focus=False):
+        """Click at absolute screen coordinates (x, y).
+
+        Refreshes the window position, optionally brings the game
+        window to the foreground, validates the coordinates, then
+        clicks.
+        """
+        self._focus_and_validate(x, y, skip_focus)
+        self.input.click(x, y)
+
+    def _double_click(self, x, y, *, skip_focus=False):
+        """Double-click at absolute screen coordinates (x, y)."""
+        self._focus_and_validate(x, y, skip_focus)
+        self.input.double_click(x, y)
+
+    def _focus_and_validate(self, x, y, skip_focus):
+        """Shared logic for _click/_double_click."""
+        if not skip_focus and self._target_window_id:
+            _set_foreground_window(self._target_window_id)
+        # Warn if coordinates fall outside the known game window area
+        if self._target_window_id:
+            rect = get_window_rect(self._target_window_id)
+            if rect:
+                in_x = rect["x"] <= x <= rect["x"] + rect["w"]
+                in_y = rect["y"] <= y <= rect["y"] + rect["h"]
+                if not (in_x and in_y):
+                    self._log(
+                        f"WARNING: Click ({x}, {y}) is OUTSIDE game window "
+                        f"({rect['x']},{rect['y']} {rect['w']}x{rect['h']})! "
+                        f"win_offset=({self._win_offset_x},{self._win_offset_y})",
+                        "warning",
+                    )
+                else:
+                    logger.debug(
+                        "Click (%d, %d) inside window (%d,%d %dx%d) OK",
+                        x, y, rect["x"], rect["y"], rect["w"], rect["h"],
+                    )
+
     def _wait_and_find(self, image_key, region_key, timeout=10, interval=0.5):
         """Wait for a template image to appear in a region.
         Returns (found, abs_x, abs_y).
         """
         template_path = self.config["images"].get(image_key, "")
-        region = self._abs_roi(self.config["roi"].get(region_key))
+        raw_roi = self.config["roi"].get(region_key)
+        region = self._abs_roi(raw_roi)
         if not template_path:
             self._log(f"Warning: No image set for '{image_key}'", "warning")
             return False, 0, 0
+
+        logger.info(
+            "wait_and_find: key='%s' template='%s' "
+            "roi_config=%s win_offset=(%d,%d) abs_region=%s",
+            image_key, os.path.basename(template_path),
+            raw_roi, self._win_offset_x, self._win_offset_y, region,
+        )
 
         end_time = time.time() + timeout
         while time.time() < end_time:
@@ -272,6 +358,12 @@ class AutomationEngine:
             if not self._refresh_window():
                 self._log("Cannot find target window. Check 'Target Window' setting.", "error")
                 return
+            # Log full coordinate diagnostic on startup
+            rect = get_window_rect(self._target_window_id) if self._target_window_id else None
+            self._log(
+                f"Automation started: window_id={self._target_window_id} "
+                f"rect={rect} offset=({self._win_offset_x},{self._win_offset_y})"
+            )
             while not self._stop_event.is_set():
                 self.iteration_count += 1
                 self.stats.record_iteration()
@@ -349,11 +441,11 @@ class AutomationEngine:
         # Step 3: Verify knight image, retry click if needed
         self.current_step = 3
         self._log("Step 3: Verifying knight selection...")
-        self._refresh_window()
-        verify_pos = self._abs_pos(self.config["click_positions"]["knight_verify_click"])
         for attempt in range(5):
             self._check_stop()
-            self.input.click(verify_pos["x"], verify_pos["y"])
+            self._refresh_window()
+            verify_pos = self._abs_pos(self.config["click_positions"]["knight_verify_click"])
+            self._click(verify_pos["x"], verify_pos["y"])
             self._sleep(0.5)
             template = self.config["images"].get("knight_verify", "")
             region = self._abs_roi(self.config["roi"]["knight_verify"])
@@ -370,9 +462,10 @@ class AutomationEngine:
         self.current_step = 4
         self._log("Step 4: Clicking stat position 4 times...")
         self._check_stop()
+        self._refresh_window()
         stat_pos = self._abs_pos(self.config["click_positions"]["stat_click"])
         for i in range(4):
-            self.input.click(stat_pos["x"], stat_pos["y"])
+            self._click(stat_pos["x"], stat_pos["y"])
             self._sleep(0.3)
         self._sleep(0.5)
 
@@ -382,7 +475,7 @@ class AutomationEngine:
         self._check_stop()
         self._refresh_window()
         name_pos = self._abs_pos(self.config["click_positions"]["name_input_click"])
-        self.input.click(name_pos["x"], name_pos["y"])
+        self._click(name_pos["x"], name_pos["y"])
         self._sleep(0.3)
         char_name = self.config.get("character_name", "Knight001")
         self.input.type_text(char_name)
@@ -405,7 +498,7 @@ class AutomationEngine:
         self._refresh_window()
         char_pos = self._abs_pos(self.config["click_positions"]["character_slot_click"])
         self._sleep(1)
-        self.input.double_click(char_pos["x"], char_pos["y"])
+        self._double_click(char_pos["x"], char_pos["y"])
         wait_time = self.config.get("wait_after_enter_game", 5)
         self._sleep(wait_time)
 
@@ -442,7 +535,7 @@ class AutomationEngine:
         # Click initial point after entering
         self._refresh_window()
         after_pos = self._abs_pos(self.config["click_positions"]["after_enter_click"])
-        self.input.click(after_pos["x"], after_pos["y"])
+        self._click(after_pos["x"], after_pos["y"])
         self._sleep(1)
 
         # Step 11: Scarecrow click loop with level/MP checking
@@ -462,9 +555,9 @@ class AutomationEngine:
                 f"[win_offset=({self._win_offset_x}, {self._win_offset_y})]"
             )
             if double:
-                self.input.double_click(x, y)
+                self._double_click(x, y)
             else:
-                self.input.click(x, y)
+                self._click(x, y)
             return (True, x, y)
         return (False, 0, 0)
 
@@ -510,23 +603,29 @@ class AutomationEngine:
         self._log("DEATH DETECTED! HP=0. Starting recovery...", "warning")
 
         # Step 1: Click revival button / death screen image
+        # Always refresh window to get fresh coordinates before clicking.
+        self._refresh_window()
         if revival_template:
             found, rx, ry = self._wait_and_find_by_path(revival_template, timeout=10)
             if found:
-                self.input.click(rx, ry)
+                self._click(rx, ry)
                 self._log("Clicked revival button")
             else:
                 self._log("Revival button not found, clicking death screen...", "warning")
                 if death_template:
+                    self._refresh_window()
+                    rect = get_window_rect(self._target_window_id) if self._target_window_id else None
                     screen = self._capture_target_screen()
                     found, dx, dy, _ = self.recognizer.find_template(screen, death_template)
-                    if found:
-                        self.input.click(dx + self._win_offset_x, dy + self._win_offset_y)
+                    if found and rect:
+                        self._click(dx + rect["x"], dy + rect["y"])
         elif death_template:
+            self._refresh_window()
+            rect = get_window_rect(self._target_window_id) if self._target_window_id else None
             screen = self._capture_target_screen()
             found, dx, dy, _ = self.recognizer.find_template(screen, death_template)
-            if found:
-                self.input.click(dx + self._win_offset_x, dy + self._win_offset_y)
+            if found and rect:
+                self._click(dx + rect["x"], dy + rect["y"])
                 self._log("Clicked death screen image")
 
         self._sleep(2)
@@ -538,7 +637,7 @@ class AutomationEngine:
         # Step 3: Double-click item (same as step 7)
         found, ix, iy = self._wait_and_find("item_icon", "item_slot", timeout=10)
         if found:
-            self.input.double_click(ix, iy)
+            self._double_click(ix, iy)
             self._sleep(1)
             self._log("Used recovery item after death")
         else:
@@ -547,7 +646,7 @@ class AutomationEngine:
         # Step 4: Click popup text (same as step 8)
         found, px, py = self._wait_and_find("popup_text", "popup_text", timeout=10)
         if found:
-            self.input.click(px, py)
+            self._click(px, py)
             self._sleep(1)
 
         self._log("Death recovery complete. Resuming scarecrow clicking...")
@@ -723,7 +822,7 @@ class AutomationEngine:
                         self._log(f"Stuck detected! No progress for {stuck_timeout}s. "
                                   f"Clicking unstuck position #{unstuck_idx + 1}...", "warning")
                         pos = positions_to_use[unstuck_idx % len(positions_to_use)]
-                        self.input.click(pos["x"], pos["y"])
+                        self._click(pos["x"], pos["y"])
                         unstuck_idx += 1
                         self._sleep(1)
                         last_progress_time = time.time()
@@ -744,10 +843,10 @@ class AutomationEngine:
                 if found:
                     dist = abs(sx - last_target_pos[0]) + abs(sy - last_target_pos[1])
                     if dist <= target_tolerance:
-                        self.input.click(sx, sy)
+                        self._click(sx, sy)
                         last_target_pos = (sx, sy)
                     else:
-                        self.input.click(sx, sy)
+                        self._click(sx, sy)
                         last_target_pos = (sx, sy)
                         self._log("Target moved, switched to nearest scarecrow", "debug")
                     scarecrow_clicked = True
@@ -762,7 +861,7 @@ class AutomationEngine:
                     origin=origin,
                 )
                 if found:
-                    self.input.click(sx, sy)
+                    self._click(sx, sy)
                     last_target_pos = (sx, sy) if target_lock_enabled else None
                     scarecrow_clicked = True
                     if idx >= 0:
@@ -865,9 +964,9 @@ class AutomationEngine:
         exit_pos = self._abs_pos(self.config["click_positions"]["exit_confirm_click"])
         found, x, y = self._wait_and_find("exit_button", "exit_button", timeout=5)
         if found:
-            self.input.click(x, y)
+            self._click(x, y)
         else:
-            self.input.click(exit_pos["x"], exit_pos["y"])
+            self._click(exit_pos["x"], exit_pos["y"])
         self._sleep(3)
 
         # Step 13: Select character and delete
@@ -875,11 +974,12 @@ class AutomationEngine:
         self._log("Step 13: Deleting character...")
         self._refresh_window()
         char_pos = self._abs_pos(self.config["click_positions"]["character_slot_click"])
-        self.input.click(char_pos["x"], char_pos["y"])
+        self._click(char_pos["x"], char_pos["y"])
         self._sleep(0.5)
 
+        self._refresh_window()
         delete_pos = self._abs_pos(self.config["click_positions"]["delete_click"])
-        self.input.click(delete_pos["x"], delete_pos["y"])
+        self._click(delete_pos["x"], delete_pos["y"])
         self._sleep(1)
 
         # Step 14: Wait for delete popup to appear and disappear

@@ -4,6 +4,12 @@
  * Receives commands via Serial and executes them as HID
  * (keyboard/mouse) inputs. Arduino Leonardo has native USB HID support.
  *
+ * REQUIRES: HID-Project library (install via Arduino Library Manager)
+ *   Sketch -> Include Library -> Manage Libraries -> search "HID-Project"
+ *
+ * Uses AbsoluteMouse for precise pixel-accurate positioning.
+ * The PC sends a SCREEN command on connect to set the coordinate mapping.
+ *
  * Protocol (text-based, newline terminated):
  *   CLICK x y         - Move mouse to (x,y) and click
  *   DBLCLICK x y      - Move mouse to (x,y) and double-click
@@ -11,32 +17,31 @@
  *   KEY keyname        - Press and release a key
  *   HOTKEY key1+key2   - Press key combination
  *   MOVE x y           - Move mouse to absolute position
+ *   SCREEN ox oy w h   - Set virtual desktop origin and dimensions
  *
  * Supported key names:
  *   tab, enter, esc, backspace, delete, space,
  *   up, down, left, right, f1-f12, ctrl, alt, shift
  */
 
-#include <Mouse.h>
-#include <Keyboard.h>
+#include <HID-Project.h>
 
-// Screen resolution (adjust to match your display)
-int screenWidth = 1920;
-int screenHeight = 1080;
+// Virtual desktop dimensions (updated by SCREEN command from PC)
+long screenOriginX = 0;
+long screenOriginY = 0;
+long screenWidth = 1920;
+long screenHeight = 1080;
 
 // Current mouse position tracking
-int currentX = screenWidth / 2;
-int currentY = screenHeight / 2;
+int currentX = 0;
+int currentY = 0;
 
 String inputBuffer = "";
 
 void setup() {
   Serial.begin(9600);
-  Mouse.begin();
+  AbsoluteMouse.begin();
   Keyboard.begin();
-
-  // Center mouse
-  resetMousePosition();
 
   Serial.println("READY");
 }
@@ -80,6 +85,9 @@ void processCommand(String cmd) {
   else if (cmd.startsWith("MOVE ")) {
     success = handleMove(cmd.substring(5));
   }
+  else if (cmd.startsWith("SCREEN ")) {
+    success = handleScreen(cmd.substring(7));
+  }
   else {
     Serial.println("ERR:UNKNOWN");
     return;
@@ -88,6 +96,26 @@ void processCommand(String cmd) {
   if (success) {
     Serial.println("OK");
   }
+}
+
+bool handleScreen(String params) {
+  // Parse "originX originY width height"
+  int idx1 = params.indexOf(' ');
+  if (idx1 < 0) { Serial.println("ERR:PARAMS"); return false; }
+  int idx2 = params.indexOf(' ', idx1 + 1);
+  if (idx2 < 0) { Serial.println("ERR:PARAMS"); return false; }
+  int idx3 = params.indexOf(' ', idx2 + 1);
+  if (idx3 < 0) { Serial.println("ERR:PARAMS"); return false; }
+
+  screenOriginX = params.substring(0, idx1).toInt();
+  screenOriginY = params.substring(idx1 + 1, idx2).toInt();
+  screenWidth = params.substring(idx2 + 1, idx3).toInt();
+  screenHeight = params.substring(idx3 + 1).toInt();
+
+  if (screenWidth <= 0) screenWidth = 1920;
+  if (screenHeight <= 0) screenHeight = 1080;
+
+  return true;
 }
 
 bool handleClick(String params, bool doubleClick) {
@@ -103,10 +131,10 @@ bool handleClick(String params, bool doubleClick) {
   moveMouseAbsolute(targetX, targetY);
   delay(50);
 
-  Mouse.click(MOUSE_LEFT);
+  AbsoluteMouse.click(MOUSE_LEFT);
   if (doubleClick) {
     delay(80);
-    Mouse.click(MOUSE_LEFT);
+    AbsoluteMouse.click(MOUSE_LEFT);
   }
   return true;
 }
@@ -189,44 +217,24 @@ bool handleMove(String params) {
 
 void moveMouseAbsolute(int targetX, int targetY) {
   /*
-   * Arduino Mouse library uses relative movement.
-   * Strategy: reset to (0,0) by moving far negative,
-   * then move to target position in steps.
+   * Convert screen pixel coordinates to HID absolute range (0-32767).
+   * Windows maps HID absolute coordinates to the virtual desktop
+   * (the combined area of all monitors).
+   *
+   * The PC sends SCREEN originX originY width height on connect,
+   * so we know the virtual desktop dimensions.
    */
+  long absX = ((long)(targetX - screenOriginX) * 32767L) / screenWidth;
+  long absY = ((long)(targetY - screenOriginY) * 32767L) / screenHeight;
 
-  // Move to origin (0,0) - overshoot to ensure we're at corner
-  for (int i = 0; i < 20; i++) {
-    Mouse.move(-127, -127, 0);
-    delay(2);
-  }
-  currentX = 0;
-  currentY = 0;
+  // Clamp to valid range
+  absX = constrain(absX, 0, 32767);
+  absY = constrain(absY, 0, 32767);
 
-  // Move to target in steps of 127 (max per move call)
-  int remainX = targetX;
-  int remainY = targetY;
-
-  while (remainX > 0 || remainY > 0) {
-    int dx = min(remainX, 127);
-    int dy = min(remainY, 127);
-    Mouse.move(dx, dy, 0);
-    remainX -= dx;
-    remainY -= dy;
-    delay(2);
-  }
+  AbsoluteMouse.moveTo(absX, absY);
 
   currentX = targetX;
   currentY = targetY;
-}
-
-void resetMousePosition() {
-  // Move mouse far to top-left corner to establish known position
-  for (int i = 0; i < 30; i++) {
-    Mouse.move(-127, -127, 0);
-    delay(2);
-  }
-  currentX = 0;
-  currentY = 0;
 }
 
 uint8_t resolveKey(String keyName) {

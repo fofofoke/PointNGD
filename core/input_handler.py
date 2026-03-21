@@ -206,6 +206,9 @@ class SoftwareInput(InputHandler):
 class ArduinoInput(InputHandler):
     """Arduino Leonardo-based HID input via serial communication.
 
+    Uses AbsoluteMouse (HID-Project library) for pixel-accurate positioning.
+    Sends screen resolution on connect so Arduino can map coordinates correctly.
+
     Protocol: Send commands as text lines.
     Commands:
         CLICK x y         - Single click
@@ -214,6 +217,7 @@ class ArduinoInput(InputHandler):
         KEY keyname        - Press key
         HOTKEY key1+key2   - Key combination
         MOVE x y           - Move mouse
+        SCREEN ox oy w h   - Set virtual desktop dimensions
     """
 
     def __init__(self, port="COM3", baudrate=9600, korean_method="clipboard"):
@@ -222,6 +226,8 @@ class ArduinoInput(InputHandler):
         self.serial = serial.Serial(port, baudrate, timeout=2)
         time.sleep(2)  # Wait for Arduino reset
         logger.info(f"Arduino connected on {port}")
+        # Send screen resolution so Arduino can map absolute coordinates
+        self._send_screen_info()
 
     def _send(self, command):
         """Send command to Arduino and wait for ACK."""
@@ -233,6 +239,29 @@ class ArduinoInput(InputHandler):
         logger.debug(f"Arduino cmd: {command} -> {response}")
         time.sleep(0.05)
         return response
+
+    def _send_screen_info(self):
+        """Send virtual desktop dimensions to Arduino for absolute mouse mapping."""
+        try:
+            if platform.system() == "Windows":
+                import ctypes
+                user32 = ctypes.windll.user32
+                # Virtual desktop = combined area of all monitors
+                origin_x = user32.GetSystemMetrics(76)   # SM_XVIRTUALSCREEN
+                origin_y = user32.GetSystemMetrics(77)   # SM_YVIRTUALSCREEN
+                width = user32.GetSystemMetrics(78)      # SM_CXVIRTUALSCREEN
+                height = user32.GetSystemMetrics(79)     # SM_CYVIRTUALSCREEN
+            else:
+                origin_x, origin_y = 0, 0
+                width, height = 1920, 1080
+
+            self._send(f"SCREEN {origin_x} {origin_y} {width} {height}")
+            logger.info(
+                f"Screen info sent to Arduino: origin=({origin_x},{origin_y}) "
+                f"size={width}x{height}"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to send screen info: {e}, using defaults")
 
     def click(self, x, y):
         self._send(f"CLICK {x} {y}")

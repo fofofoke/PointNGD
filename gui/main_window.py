@@ -1,4 +1,4 @@
-"""Main GUI window for Lineage Classic automation bot."""
+"""Main GUI window for LC AB."""
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext, simpledialog, filedialog
 import threading
@@ -16,7 +16,7 @@ class MainWindow:
 
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("Lineage Classic Automation Bot")
+        self.root.title("LC AB")
         self.root.geometry("800x700")
         self.root.minsize(700, 600)
 

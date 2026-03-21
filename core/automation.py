@@ -1,4 +1,4 @@
-"""Main automation workflow engine for Lineage Classic bot."""
+"""Main automation workflow engine for LC AB."""
 import math
 import os
 import time
@@ -285,7 +285,7 @@ class AutomationEngine:
                     self._log(f"Stats: {self.stats.total_iterations} iterations, "
                               f"{self.stats.elapsed_str()} elapsed")
                     self.telegram.send_message_async(
-                        f"Lineage Bot: SUCCESS! Found MP 9 at Level 5. "
+                        f"LC AB: SUCCESS! Found MP 9 at Level 5. "
                         f"Iteration: {self.iteration_count}, "
                         f"Time: {self.stats.elapsed_str()}"
                     )

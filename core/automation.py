@@ -200,11 +200,36 @@ class AutomationEngine:
         """
         self._focus_and_validate(x, y, skip_focus)
         self.input.click(x, y)
+        self._verify_cursor(x, y)
 
     def _double_click(self, x, y, *, skip_focus=False):
         """Double-click at absolute screen coordinates (x, y)."""
         self._focus_and_validate(x, y, skip_focus)
         self.input.double_click(x, y)
+        self._verify_cursor(x, y)
+
+    def _verify_cursor(self, intended_x, intended_y):
+        """Check actual cursor position after click and warn on mismatch."""
+        try:
+            import pyautogui
+            actual_x, actual_y = pyautogui.position()
+            dx = actual_x - intended_x
+            dy = actual_y - intended_y
+            if abs(dx) > 5 or abs(dy) > 5:
+                self._log(
+                    f"CURSOR MISMATCH: intended ({intended_x},{intended_y}) "
+                    f"but cursor is at ({actual_x},{actual_y}) — "
+                    f"delta=({dx:+d},{dy:+d}). "
+                    f"Possible DPI scaling issue with pyautogui.",
+                    "warning",
+                )
+            else:
+                logger.debug(
+                    "Cursor verify OK: intended (%d,%d) actual (%d,%d)",
+                    intended_x, intended_y, actual_x, actual_y,
+                )
+        except Exception as e:
+            logger.debug("Could not verify cursor position: %s", e)
 
     def _focus_and_validate(self, x, y, skip_focus):
         """Shared logic for _click/_double_click."""

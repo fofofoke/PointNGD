@@ -33,6 +33,34 @@ except ImportError:
     pytesseract = None
 
 
+def _ensure_dpi_awareness():
+    """Set DPI awareness early to ensure consistent coordinates.
+
+    On Windows, mss calls SetProcessDpiAwareness on first instantiation,
+    which changes the coordinate system for the entire process.  If any
+    Win32 API (GetClientRect, ClientToScreen) is called *before* mss sets
+    DPI awareness, the returned values will be in virtual/logical
+    coordinates, while post-mss calls return physical coordinates.
+
+    By triggering mss early (at import / class init time), we guarantee
+    that all subsequent Win32 coordinate queries use the same physical
+    coordinate space as mss screen captures.
+    """
+    import sys
+    if sys.platform == "win32" and mss is not None:
+        try:
+            with mss.mss():
+                pass  # __init__ sets DPI awareness as a side effect
+        except Exception:
+            pass
+
+
+# Set DPI awareness as early as possible so that window coordinate
+# queries (ClientToScreen, GetClientRect) are in the same physical
+# coordinate space that mss.grab() uses for screen captures.
+_ensure_dpi_awareness()
+
+
 class ImageRecognition:
     """Handles screen capture, template matching, and OCR."""
 
@@ -107,6 +135,13 @@ class ImageRecognition:
         if found:
             abs_x = region["x"] + rel_x
             abs_y = region["y"] + rel_y
+            logger.debug(
+                "Template matched: region=(%d,%d %dx%d) rel=(%d,%d) "
+                "abs=(%d,%d) conf=%.3f capture_size=(%d,%d)",
+                region["x"], region["y"], region["w"], region["h"],
+                rel_x, rel_y, abs_x, abs_y, conf,
+                screen.shape[1], screen.shape[0],
+            )
             return True, abs_x, abs_y, conf
         return False, 0, 0, conf
 

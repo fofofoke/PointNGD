@@ -832,6 +832,7 @@ class ClickPositionEditor(tk.Toplevel):
 
     POSITION_LABELS = {
         "knight_verify_click": "Knight Verify Click Position",
+        "stat_click": "Stat Click Position (4x after verify)",
         "name_input_click": "Name Input Click Position",
         "character_slot_click": "Character Slot Click Position",
         "after_enter_click": "After Enter Game Click Position",

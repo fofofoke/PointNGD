@@ -101,8 +101,9 @@ class TestConfig(unittest.TestCase):
     def test_config_has_all_required_click_positions(self):
         from core.config import DEFAULT_CONFIG
         required_clicks = [
-            "knight_verify_click", "name_input_click", "character_slot_click",
-            "after_enter_click", "exit_confirm_click", "delete_click",
+            "knight_verify_click", "stat_click", "name_input_click",
+            "character_slot_click", "after_enter_click",
+            "exit_confirm_click", "delete_click",
         ]
         for key in required_clicks:
             self.assertIn(key, DEFAULT_CONFIG["click_positions"],
@@ -707,7 +708,7 @@ class TestWorkflowIntegrity(unittest.TestCase):
         """Verify all click position keys used in automation exist in config."""
         from core.config import DEFAULT_CONFIG
         required_clicks = [
-            "knight_verify_click", "name_input_click",
+            "knight_verify_click", "stat_click", "name_input_click",
             "character_slot_click", "after_enter_click",
             "exit_confirm_click", "delete_click",
         ]

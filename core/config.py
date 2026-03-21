@@ -32,6 +32,7 @@ DEFAULT_CONFIG = {
     },
     "click_positions": {
         "knight_verify_click": {"x": 0, "y": 0},
+        "stat_click": {"x": 0, "y": 0},
         "name_input_click": {"x": 0, "y": 0},
         "character_slot_click": {"x": 0, "y": 0},
         "after_enter_click": {"x": 0, "y": 0},

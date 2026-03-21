@@ -22,21 +22,22 @@ class AutomationEngine:
     1)  Character select screen: double-click empty slot
     2)  Character creation screen: click knight icon
     3)  Verify knight image at position, retry if wrong
-    4)  Click name input position, type character name
-    5)  Click confirm button to create character
-    6)  Auto-return to select screen: double-click character slot to enter game
-    7)  Press tab, double-click item icon
-    8)  Left popup appears: click specific text in popup
-    9)  After configurable delay, click point then find & click scarecrow repeatedly
-    10) After each scarecrow click, check level-up (image/OCR). Check MP at each level:
-        - Level 2, MP 3: continue scarecrow, then go to step 14
-        - Level 3, MP 5: continue; else go to step 11
-        - Level 4, MP 7: continue; else go to step 11
-        - Level 5, MP 9: SUCCESS -> telegram notify & stop; else go to step 11
-    11) Ctrl+Q, click exit confirm to return to character select
-    12) Select character, click delete, wait for delete popup
-    13) After delete popup disappears, go to step 1
-    14) MP check at higher levels (handled in step 10 logic)
+    4)  Click stat position 4 times
+    5)  Click name input position, type character name
+    6)  Click confirm button to create character
+    7)  Auto-return to select screen: double-click character slot to enter game
+    8)  Press tab, double-click item icon
+    9)  Left popup appears: click specific text in popup
+    10) After configurable delay, click point then find & click scarecrow repeatedly
+    11) After each scarecrow click, check level-up (image/OCR). Check MP at each level:
+        - Level 2, MP 3: continue scarecrow, then go to step 15
+        - Level 3, MP 5: continue; else go to step 12
+        - Level 4, MP 7: continue; else go to step 12
+        - Level 5, MP 9: SUCCESS -> telegram notify & stop; else go to step 12
+    12) Ctrl+Q, click exit confirm to return to character select
+    13) Select character, click delete, wait for delete popup
+    14) After delete popup disappears, go to step 1
+    15) MP check at higher levels (handled in step 11 logic)
     """
 
     # Workflow states
@@ -365,9 +366,19 @@ class AutomationEngine:
                 break  # No verification image, just proceed
         self._sleep(0.5)
 
-        # Step 4: Click name input, type character name
+        # Step 4: Click stat position 4 times
         self.current_step = 4
-        self._log("Step 4: Entering character name...")
+        self._log("Step 4: Clicking stat position 4 times...")
+        self._check_stop()
+        stat_pos = self._abs_pos(self.config["click_positions"]["stat_click"])
+        for i in range(4):
+            self.input.click(stat_pos["x"], stat_pos["y"])
+            self._sleep(0.3)
+        self._sleep(0.5)
+
+        # Step 5: Click name input, type character name
+        self.current_step = 5
+        self._log("Step 5: Entering character name...")
         self._check_stop()
         self._refresh_window()
         name_pos = self._abs_pos(self.config["click_positions"]["name_input_click"])
@@ -377,9 +388,9 @@ class AutomationEngine:
         self.input.type_text(char_name)
         self._sleep(0.5)
 
-        # Step 5: Click confirm to create character
-        self.current_step = 5
-        self._log("Step 5: Confirming character creation...")
+        # Step 6: Click confirm to create character
+        self.current_step = 6
+        self._log("Step 6: Confirming character creation...")
         result = self._run_step_with_retry(
             lambda: self._step_find_and_click("confirm_button", "confirm_button", timeout=5),
             "find_confirm_button")
@@ -387,9 +398,9 @@ class AutomationEngine:
             return "error"
         self._sleep(2)
 
-        # Step 6: Double-click character to enter game
-        self.current_step = 6
-        self._log("Step 6: Entering game...")
+        # Step 7: Double-click character to enter game
+        self.current_step = 7
+        self._log("Step 7: Entering game...")
         self._check_stop()
         self._refresh_window()
         char_pos = self._abs_pos(self.config["click_positions"]["character_slot_click"])
@@ -398,9 +409,9 @@ class AutomationEngine:
         wait_time = self.config.get("wait_after_enter_game", 5)
         self._sleep(wait_time)
 
-        # Step 7: Press tab, double-click item
-        self.current_step = 7
-        self._log("Step 7: Opening inventory, clicking item...")
+        # Step 8: Press tab, double-click item
+        self.current_step = 8
+        self._log("Step 8: Opening inventory, clicking item...")
         self._check_stop()
         self.input.press_key("tab")
         self._sleep(1)
@@ -411,9 +422,9 @@ class AutomationEngine:
             return "error"
         self._sleep(1)
 
-        # Step 8: Click text in popup
-        self.current_step = 8
-        self._log("Step 8: Clicking popup text...")
+        # Step 9: Click text in popup
+        self.current_step = 9
+        self._log("Step 9: Clicking popup text...")
         result = self._run_step_with_retry(
             lambda: self._step_find_and_click("popup_text", "popup_text", timeout=10),
             "find_popup_text")
@@ -421,9 +432,9 @@ class AutomationEngine:
             return "error"
         self._sleep(1)
 
-        # Step 9: Wait, click point, then find & click scarecrow
-        self.current_step = 9
-        self._log("Step 9: Starting scarecrow clicking...")
+        # Step 10: Wait, click point, then find & click scarecrow
+        self.current_step = 10
+        self._log("Step 10: Starting scarecrow clicking...")
         self._check_stop()
         scarecrow_delay = self.config.get("wait_before_scarecrow", 3)
         self._sleep(scarecrow_delay)
@@ -434,8 +445,8 @@ class AutomationEngine:
         self.input.click(after_pos["x"], after_pos["y"])
         self._sleep(1)
 
-        # Step 10: Scarecrow click loop with level/MP checking
-        self.current_step = 10
+        # Step 11: Scarecrow click loop with level/MP checking
+        self.current_step = 11
         result = self._scarecrow_loop()
         return result
 
@@ -837,10 +848,10 @@ class AutomationEngine:
         return "stopped"
 
     def _exit_and_delete(self):
-        """Steps 11-13: Exit game, delete character."""
-        # Step 11: Ctrl+Q to exit
-        self.current_step = 11
-        self._log("Step 11: Exiting game (Ctrl+Q)...")
+        """Steps 12-14: Exit game, delete character."""
+        # Step 12: Ctrl+Q to exit
+        self.current_step = 12
+        self._log("Step 12: Exiting game (Ctrl+Q)...")
         self.input.hotkey("ctrl", "q")
         self._sleep(1)
 
@@ -854,9 +865,9 @@ class AutomationEngine:
             self.input.click(exit_pos["x"], exit_pos["y"])
         self._sleep(3)
 
-        # Step 12: Select character and delete
-        self.current_step = 12
-        self._log("Step 12: Deleting character...")
+        # Step 13: Select character and delete
+        self.current_step = 13
+        self._log("Step 13: Deleting character...")
         self._refresh_window()
         char_pos = self._abs_pos(self.config["click_positions"]["character_slot_click"])
         self.input.click(char_pos["x"], char_pos["y"])
@@ -866,9 +877,9 @@ class AutomationEngine:
         self.input.click(delete_pos["x"], delete_pos["y"])
         self._sleep(1)
 
-        # Step 13: Wait for delete popup to appear and disappear
-        self.current_step = 13
-        self._log("Step 13: Waiting for delete confirmation...")
+        # Step 14: Wait for delete popup to appear and disappear
+        self.current_step = 14
+        self._log("Step 14: Waiting for delete confirmation...")
         delete_wait = self.config.get("delete_wait_time", 10)
 
         # Wait for popup to appear

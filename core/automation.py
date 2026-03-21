@@ -143,6 +143,7 @@ class AutomationEngine:
         if not title:
             self._win_offset_x = 0
             self._win_offset_y = 0
+            logger.debug("No target window title set, using offset (0, 0)")
             return True
         windows = find_windows_by_title(title)
         if not windows:
@@ -155,6 +156,11 @@ class AutomationEngine:
             return False
         self._win_offset_x = rect["x"]
         self._win_offset_y = rect["y"]
+        logger.debug(
+            "Window refresh: hwnd=%s title='%s' rect=(%d,%d %dx%d)",
+            self._target_window_id, windows[0][1],
+            rect["x"], rect["y"], rect["w"], rect["h"],
+        )
         return True
 
     def _abs_roi(self, roi):
@@ -211,11 +217,16 @@ class AutomationEngine:
                 in_x = rect["x"] <= x <= rect["x"] + rect["w"]
                 in_y = rect["y"] <= y <= rect["y"] + rect["h"]
                 if not (in_x and in_y):
-                    logger.warning(
-                        "Click (%d, %d) is OUTSIDE game window "
-                        "(%d,%d %dx%d)! Possible coordinate error.",
-                        x, y, rect["x"], rect["y"],
-                        rect["w"], rect["h"],
+                    self._log(
+                        f"WARNING: Click ({x}, {y}) is OUTSIDE game window "
+                        f"({rect['x']},{rect['y']} {rect['w']}x{rect['h']})! "
+                        f"win_offset=({self._win_offset_x},{self._win_offset_y})",
+                        "warning",
+                    )
+                else:
+                    logger.debug(
+                        "Click (%d, %d) inside window (%d,%d %dx%d) OK",
+                        x, y, rect["x"], rect["y"], rect["w"], rect["h"],
                     )
 
     def _wait_and_find(self, image_key, region_key, timeout=10, interval=0.5):
@@ -223,10 +234,18 @@ class AutomationEngine:
         Returns (found, abs_x, abs_y).
         """
         template_path = self.config["images"].get(image_key, "")
-        region = self._abs_roi(self.config["roi"].get(region_key))
+        raw_roi = self.config["roi"].get(region_key)
+        region = self._abs_roi(raw_roi)
         if not template_path:
             self._log(f"Warning: No image set for '{image_key}'", "warning")
             return False, 0, 0
+
+        logger.info(
+            "wait_and_find: key='%s' template='%s' "
+            "roi_config=%s win_offset=(%d,%d) abs_region=%s",
+            image_key, os.path.basename(template_path),
+            raw_roi, self._win_offset_x, self._win_offset_y, region,
+        )
 
         end_time = time.time() + timeout
         while time.time() < end_time:
@@ -339,6 +358,12 @@ class AutomationEngine:
             if not self._refresh_window():
                 self._log("Cannot find target window. Check 'Target Window' setting.", "error")
                 return
+            # Log full coordinate diagnostic on startup
+            rect = get_window_rect(self._target_window_id) if self._target_window_id else None
+            self._log(
+                f"Automation started: window_id={self._target_window_id} "
+                f"rect={rect} offset=({self._win_offset_x},{self._win_offset_y})"
+            )
             while not self._stop_event.is_set():
                 self.iteration_count += 1
                 self.stats.record_iteration()

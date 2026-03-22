@@ -536,15 +536,18 @@ class AutomationEngine:
         """Run one complete character creation + testing cycle.
         Returns: 'success', 'delete_and_retry', or 'error'.
         """
-        # Step 1: Double-click empty slot
+        # Step 1: Double-click empty slot and verify character creation screen
         self.current_step = 1
         self._log("Step 1: Finding empty slot...")
         result = self._run_step_with_retry(
-            lambda: self._step_find_and_click("empty_slot", "empty_slot", double=True, timeout=15),
+            lambda: self._step_find_and_click(
+                "empty_slot", "empty_slot", double=True, timeout=15,
+                verify_image_key="knight_icon", verify_region_key="knight_icon",
+                verify_timeout=3,
+            ),
             "find_empty_slot")
         if result is None:
             return "error"
-        self._sleep(1)
 
         # Step 2: Click knight icon
         self.current_step = 2
@@ -661,9 +664,12 @@ class AutomationEngine:
         result = self._scarecrow_loop()
         return result
 
-    def _step_find_and_click(self, image_key, region_key, double=False, timeout=10):
+    def _step_find_and_click(self, image_key, region_key, double=False, timeout=10,
+                             verify_image_key=None, verify_region_key=None,
+                             verify_timeout=3):
         """Helper for step retry: find template and click.
-        Returns (True, x, y) or (False, 0, 0).
+        If verify_image_key is given, checks that the verify template appears
+        after clicking.  Returns (True, x, y) or (False, 0, 0).
         """
         found, x, y = self._wait_and_find(image_key, region_key, timeout=timeout)
         if found:
@@ -676,6 +682,20 @@ class AutomationEngine:
                 self._double_click(x, y)
             else:
                 self._click(x, y)
+            # Post-click verification
+            if verify_image_key and verify_region_key:
+                self._sleep(1)
+                v_found, _, _ = self._wait_and_find(
+                    verify_image_key, verify_region_key, timeout=verify_timeout
+                )
+                if not v_found:
+                    self._log(
+                        f"Post-click verification failed: '{verify_image_key}' "
+                        f"not found after clicking '{image_key}'",
+                        "warning",
+                    )
+                    return (False, 0, 0)
+                self._log(f"Post-click verification OK: '{verify_image_key}' found")
             return (True, x, y)
         return (False, 0, 0)
 

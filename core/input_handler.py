@@ -300,6 +300,18 @@ class InputHandler:
     def click(self, x, y):
         raise NotImplementedError
 
+    def click_in_place(self, count=1):
+        """Click at the current cursor position without moving it.
+
+        This is used by AutomationEngine after _ensure_cursor_pos has
+        already verified the cursor is at the correct position, so that
+        no re-move (which could undo DPI compensation) occurs.
+
+        Args:
+            count: Number of clicks (1=single, 2=double).
+        """
+        raise NotImplementedError
+
     def double_click(self, x, y):
         raise NotImplementedError
 
@@ -351,6 +363,15 @@ class SoftwareInput(InputHandler):
         if not _native_click(1):
             self.pyautogui.click()  # fallback
         logger.debug(f"Software click at ({x}, {y})")
+
+    def click_in_place(self, count=1):
+        """Click at the current cursor position without moving it."""
+        if not _native_click(1, repeat=count):
+            if count >= 2:
+                self.pyautogui.doubleClick()
+            else:
+                self.pyautogui.click()
+        logger.debug(f"Software click-in-place (count={count})")
 
     def double_click(self, x, y):
         self._move(x, y)
@@ -498,6 +519,11 @@ class ArduinoInput(InputHandler):
 
     def click(self, x, y):
         self._send(f"CLICK {x} {y}")
+
+    def click_in_place(self, count=1):
+        """Click at current cursor position (Arduino falls back to native click)."""
+        if not _native_click(1, repeat=count):
+            logger.warning("Arduino click_in_place: native click failed")
 
     def double_click(self, x, y):
         self._send(f"DBLCLICK {x} {y}")

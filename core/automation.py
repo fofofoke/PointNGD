@@ -208,21 +208,39 @@ class AutomationEngine:
         self.input.double_click(x, y)
         self._verify_cursor(x, y)
 
-    def _verify_cursor(self, intended_x, intended_y):
-        """Check actual cursor position after click and warn on mismatch."""
+    def _verify_cursor(self, intended_x, intended_y, *, _retried=False):
+        """Check actual cursor position after click and retry on mismatch.
+
+        If the cursor ended up more than 5 px away from the intended
+        position (common on high-DPI displays when pyautogui mis-
+        normalises coordinates), we re-position via the native OS API
+        and click again — once.
+        """
         try:
             import pyautogui
             actual_x, actual_y = pyautogui.position()
             dx = actual_x - intended_x
             dy = actual_y - intended_y
             if abs(dx) > 5 or abs(dy) > 5:
-                self._log(
-                    f"CURSOR MISMATCH: intended ({intended_x},{intended_y}) "
-                    f"but cursor is at ({actual_x},{actual_y}) — "
-                    f"delta=({dx:+d},{dy:+d}). "
-                    f"Possible DPI scaling issue with pyautogui.",
-                    "warning",
-                )
+                if not _retried:
+                    self._log(
+                        f"CURSOR MISMATCH: intended ({intended_x},{intended_y}) "
+                        f"actual ({actual_x},{actual_y}) delta=({dx:+d},{dy:+d}). "
+                        f"Retrying with native cursor positioning.",
+                        "warning",
+                    )
+                    from core.input_handler import _set_cursor_pos
+                    _set_cursor_pos(intended_x, intended_y)
+                    pyautogui.click()
+                    self._verify_cursor(intended_x, intended_y, _retried=True)
+                else:
+                    self._log(
+                        f"CURSOR STILL MISMATCHED after retry: intended "
+                        f"({intended_x},{intended_y}) actual ({actual_x},"
+                        f"{actual_y}) delta=({dx:+d},{dy:+d}). "
+                        f"DPI scaling issue persists.",
+                        "warning",
+                    )
             else:
                 logger.debug(
                     "Cursor verify OK: intended (%d,%d) actual (%d,%d)",

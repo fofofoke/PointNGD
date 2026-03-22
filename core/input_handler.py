@@ -1,10 +1,42 @@
 """Input handler abstraction: Software (pyautogui) and Arduino Leonardo (serial HID)."""
+import sys
 import time
 import logging
 import subprocess
 import platform
 
 logger = logging.getLogger(__name__)
+
+
+def _set_cursor_pos(x, y):
+    """Move cursor to (x, y) using native OS API (physical pixels).
+
+    On high-DPI displays pyautogui normalises coordinates via
+    GetSystemMetrics / MOUSEEVENTF_ABSOLUTE which can be off by the
+    DPI scale factor.  Calling SetCursorPos directly bypasses that
+    normalisation and always operates in *physical* pixel space
+    (assuming the process is already DPI-aware, which main.py ensures).
+
+    On Linux we fall back to xdotool, then pyautogui.
+    """
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.user32.SetCursorPos(int(x), int(y))
+            return True
+        except Exception:
+            pass
+    elif sys.platform == "linux":
+        try:
+            subprocess.run(
+                ["xdotool", "mousemove", "--", str(int(x)), str(int(y))],
+                check=True, timeout=2,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            return True
+        except Exception:
+            pass
+    return False
 
 
 def _copy_to_clipboard(text):
@@ -162,7 +194,14 @@ class InputHandler:
 
 
 class SoftwareInput(InputHandler):
-    """Software-based input using pyautogui."""
+    """Software-based input using pyautogui.
+
+    On high-DPI displays (e.g. 150 % scaling) pyautogui's internal
+    coordinate normalisation can send the cursor to the wrong physical
+    pixel.  To work around this we position the cursor via the native
+    OS API (``SetCursorPos`` on Windows, ``xdotool`` on Linux) and then
+    ask pyautogui to click *at the current position* (no coordinates).
+    """
 
     def __init__(self, korean_method="clipboard"):
         super().__init__(korean_method)
@@ -171,12 +210,24 @@ class SoftwareInput(InputHandler):
         pyautogui.FAILSAFE = True
         pyautogui.PAUSE = 0.05
 
+    # -- internal helpers ------------------------------------------------
+
+    def _move(self, x, y):
+        """Move cursor to *physical* (x, y) using native API first."""
+        if not _set_cursor_pos(x, y):
+            # Fallback: let pyautogui try (may be off on high-DPI)
+            self.pyautogui.moveTo(x, y)
+
+    # -- public API ------------------------------------------------------
+
     def click(self, x, y):
-        self.pyautogui.click(x, y)
+        self._move(x, y)
+        self.pyautogui.click()  # click at current cursor position
         logger.debug(f"Software click at ({x}, {y})")
 
     def double_click(self, x, y):
-        self.pyautogui.doubleClick(x, y)
+        self._move(x, y)
+        self.pyautogui.doubleClick()  # double-click at current position
         logger.debug(f"Software double-click at ({x}, {y})")
 
     def type_text(self, text):
@@ -200,7 +251,7 @@ class SoftwareInput(InputHandler):
         logger.debug(f"Software hotkey: {keys}")
 
     def move_to(self, x, y):
-        self.pyautogui.moveTo(x, y)
+        self._move(x, y)
 
 
 def _get_linux_screen_size():

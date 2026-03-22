@@ -536,18 +536,53 @@ class AutomationEngine:
         """Run one complete character creation + testing cycle.
         Returns: 'success', 'delete_and_retry', or 'error'.
         """
-        # Step 1: Double-click empty slot
+        # Step 1: Double-click empty slot, then verify knight icon appears
         self.current_step = 1
-        self._log("Step 1: Finding empty slot...")
-        result = self._run_step_with_retry(
-            lambda: self._step_find_and_click("empty_slot", "empty_slot", double=True, timeout=15),
-            "find_empty_slot")
-        if result is None:
-            return "error"
-        self._sleep(1)
+        knight_appeared = False
+        for slot_attempt in range(self._step_max_retries):
+            self._check_stop()
+            self._log(f"Step 1: Finding empty slot... (attempt {slot_attempt + 1})")
+            result = self._run_step_with_retry(
+                lambda: self._step_find_and_click("empty_slot", "empty_slot", double=True, timeout=15),
+                "find_empty_slot")
+            if result is None:
+                return "error"
+            self._sleep(1)
 
-        # Step 2: Click knight icon
-        self.current_step = 2
+            # Verify: check if knight icon appeared (= slot click actually worked)
+            self.current_step = 2
+            self._log("Step 2: Checking for knight icon...")
+            self._refresh_window()
+            template_path = self.config["images"].get("knight_icon", "")
+            raw_roi = self.config["roi"].get("knight_icon")
+            if template_path and raw_roi:
+                region = self._abs_roi(raw_roi)
+                found, _, _, conf = self.recognizer.find_template_in_region(
+                    template_path, region
+                )
+                if found:
+                    knight_appeared = True
+                    break
+                else:
+                    self._log(
+                        f"Knight icon NOT found after empty slot click "
+                        f"(conf={conf:.2f}). Slot click may have missed. "
+                        f"Retrying Step 1...",
+                        "warning",
+                    )
+                    self._sleep(self._step_retry_delay)
+                    self.current_step = 1
+            else:
+                # No knight_icon image configured, skip verification
+                knight_appeared = True
+                break
+
+        if not knight_appeared:
+            self._log("Failed: knight icon never appeared after empty slot clicks", "error")
+            self._save_error_screenshot("empty_slot_no_knight")
+            return "error"
+
+        # Step 2: Click knight icon (already confirmed visible)
         self._log("Step 2: Clicking knight icon...")
         result = self._run_step_with_retry(
             lambda: self._step_find_and_click("knight_icon", "knight_icon", timeout=10),

@@ -223,80 +223,74 @@ class AutomationEngine:
         """Click at absolute screen coordinates (x, y).
 
         Refreshes the window position, optionally brings the game
-        window to the foreground, validates the coordinates, then
-        clicks.
+        window to the foreground, validates the coordinates, ensures
+        the cursor is at the correct position, then clicks.
         """
         self._focus_and_validate(x, y, skip_focus)
+        self._ensure_cursor_pos(x, y)
         self.input.click(x, y)
-        self._verify_cursor(x, y, double=False)
 
     def _double_click(self, x, y, *, skip_focus=False):
         """Double-click at absolute screen coordinates (x, y)."""
         self._focus_and_validate(x, y, skip_focus)
+        self._ensure_cursor_pos(x, y)
         self.input.double_click(x, y)
-        self._verify_cursor(x, y, double=True)
 
-    def _verify_cursor(self, intended_x, intended_y, *, double=False, _retried=False):
-        """Check actual cursor position after click and retry on mismatch.
+    def _get_actual_cursor_pos(self):
+        """Return (x, y) of the current cursor using native OS API."""
+        if sys.platform == "win32":
+            pos = _get_cursor_pos_win32()
+            if pos:
+                return pos
+        elif sys.platform == "linux":
+            from core.input_handler import _xdotool_getmouselocation
+            pos = _xdotool_getmouselocation()
+            if pos:
+                return pos
+        import pyautogui
+        return pyautogui.position()
 
-        If the cursor ended up more than 5 px away from the intended
-        position (common on high-DPI displays when pyautogui mis-
-        normalises coordinates), we re-position via the native OS API
-        and click again — once.
+    def _ensure_cursor_pos(self, x, y, _retried=False):
+        """Move cursor to (x, y) and verify it arrived before clicking.
 
-        Args:
-            double: If True, retry with doubleClick() instead of click().
+        On high-DPI displays pyautogui can mis-normalise coordinates,
+        landing the cursor far from the intended position.  This method
+        moves the cursor via the native OS API, then reads back the
+        position.  If the cursor is more than 5 px off, it retries once
+        with a small delay.
         """
         try:
-            # Use native OS API to get cursor position (same coordinate
-            # system as SetCursorPos / xdotool mousemove) to avoid false
-            # mismatches caused by pyautogui DPI normalisation.
-            actual_x, actual_y = None, None
-            if sys.platform == "win32":
-                pos = _get_cursor_pos_win32()
-                if pos:
-                    actual_x, actual_y = pos
-            elif sys.platform == "linux":
-                from core.input_handler import _xdotool_getmouselocation
-                pos = _xdotool_getmouselocation()
-                if pos:
-                    actual_x, actual_y = pos
-            if actual_x is None:
-                import pyautogui
-                actual_x, actual_y = pyautogui.position()
+            from core.input_handler import _set_cursor_pos
+            _set_cursor_pos(x, y)
+            time.sleep(0.02)  # brief settle time
 
-            dx = actual_x - intended_x
-            dy = actual_y - intended_y
+            actual_x, actual_y = self._get_actual_cursor_pos()
+            dx = actual_x - x
+            dy = actual_y - y
+
             if abs(dx) > 5 or abs(dy) > 5:
                 if not _retried:
-                    action = "double-click" if double else "click"
                     self._log(
-                        f"CURSOR MISMATCH: intended ({intended_x},{intended_y}) "
+                        f"CURSOR MISMATCH before click: intended ({x},{y}) "
                         f"actual ({actual_x},{actual_y}) delta=({dx:+d},{dy:+d}). "
-                        f"Retrying {action} with native cursor positioning.",
+                        f"Repositioning cursor.",
                         "warning",
                     )
-                    from core.input_handler import _set_cursor_pos, _native_click
-                    _set_cursor_pos(intended_x, intended_y)
-                    if not _native_click(1, repeat=2 if double else 1):
-                        import pyautogui
-                        if double:
-                            pyautogui.doubleClick()
-                        else:
-                            pyautogui.click()
-                    self._verify_cursor(intended_x, intended_y, double=double, _retried=True)
+                    time.sleep(0.05)
+                    _set_cursor_pos(x, y)
+                    time.sleep(0.05)
+                    self._ensure_cursor_pos(x, y, _retried=True)
                 else:
                     self._log(
-                        f"CURSOR STILL MISMATCHED after retry: intended "
-                        f"({intended_x},{intended_y}) actual ({actual_x},"
-                        f"{actual_y}) delta=({dx:+d},{dy:+d}). "
-                        f"DPI scaling issue persists.",
+                        f"CURSOR STILL MISMATCHED after reposition: intended "
+                        f"({x},{y}) actual ({actual_x},{actual_y}) "
+                        f"delta=({dx:+d},{dy:+d}). DPI scaling issue persists.",
                         "warning",
                     )
             else:
                 logger.debug(
-                    "Cursor verify OK: intended (%d,%d) actual (%d,%d)",
-                    intended_x, intended_y, actual_x, actual_y,
+                    "Cursor position OK before click: intended (%d,%d) actual (%d,%d)",
+                    x, y, actual_x, actual_y,
                 )
         except Exception as e:
             logger.debug("Could not verify cursor position: %s", e)

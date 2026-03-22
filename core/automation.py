@@ -17,28 +17,56 @@ logger = logging.getLogger(__name__)
 
 
 def _set_foreground_window(hwnd):
-    """Bring the target window to the foreground (Windows only).
+    """Bring the target window to the foreground.
 
-    Tries SetForegroundWindow first, falls back to simulating an Alt
-    key press (which satisfies the OS foreground-lock policy) and
-    retrying.
+    Windows: Tries SetForegroundWindow, falls back to simulating an Alt
+    key press (which satisfies the OS foreground-lock policy) and retrying.
+
+    Linux: Uses xdotool windowactivate to focus the window.
+    """
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            # First attempt
+            if user32.SetForegroundWindow(int(hwnd)):
+                return
+            # OS may block SetForegroundWindow unless the calling thread
+            # owns the foreground lock.  A brief Alt press/release is the
+            # standard workaround.
+            user32.keybd_event(0x12, 0, 0, 0)       # Alt down
+            user32.keybd_event(0x12, 0, 0x0002, 0)  # Alt up
+            user32.SetForegroundWindow(int(hwnd))
+        except Exception:
+            pass
+    elif sys.platform == "linux":
+        import subprocess
+        try:
+            subprocess.run(
+                ["xdotool", "windowactivate", "--sync", str(hwnd)],
+                check=True, timeout=3,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
+
+
+def _get_cursor_pos_win32():
+    """Get cursor position via Win32 GetCursorPos (physical pixels).
+
+    Returns (x, y) or None on failure.  Unlike pyautogui.position(),
+    this always returns physical pixel coordinates matching SetCursorPos.
     """
     if sys.platform != "win32":
-        return
+        return None
     try:
         import ctypes
-        user32 = ctypes.windll.user32
-        # First attempt
-        if user32.SetForegroundWindow(int(hwnd)):
-            return
-        # OS may block SetForegroundWindow unless the calling thread
-        # owns the foreground lock.  A brief Alt press/release is the
-        # standard workaround.
-        user32.keybd_event(0x12, 0, 0, 0)       # Alt down
-        user32.keybd_event(0x12, 0, 0x0002, 0)  # Alt up
-        user32.SetForegroundWindow(int(hwnd))
+        import ctypes.wintypes
+        pt = ctypes.wintypes.POINT()
+        ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+        return pt.x, pt.y
     except Exception:
-        pass
+        return None
 
 
 class AutomationEngine:
@@ -220,8 +248,23 @@ class AutomationEngine:
             double: If True, retry with doubleClick() instead of click().
         """
         try:
-            import pyautogui
-            actual_x, actual_y = pyautogui.position()
+            # Use native OS API to get cursor position (same coordinate
+            # system as SetCursorPos / xdotool mousemove) to avoid false
+            # mismatches caused by pyautogui DPI normalisation.
+            actual_x, actual_y = None, None
+            if sys.platform == "win32":
+                pos = _get_cursor_pos_win32()
+                if pos:
+                    actual_x, actual_y = pos
+            elif sys.platform == "linux":
+                from core.input_handler import _xdotool_getmouselocation
+                pos = _xdotool_getmouselocation()
+                if pos:
+                    actual_x, actual_y = pos
+            if actual_x is None:
+                import pyautogui
+                actual_x, actual_y = pyautogui.position()
+
             dx = actual_x - intended_x
             dy = actual_y - intended_y
             if abs(dx) > 5 or abs(dy) > 5:
@@ -233,12 +276,14 @@ class AutomationEngine:
                         f"Retrying {action} with native cursor positioning.",
                         "warning",
                     )
-                    from core.input_handler import _set_cursor_pos
+                    from core.input_handler import _set_cursor_pos, _native_click
                     _set_cursor_pos(intended_x, intended_y)
-                    if double:
-                        pyautogui.doubleClick()
-                    else:
-                        pyautogui.click()
+                    if not _native_click(1, repeat=2 if double else 1):
+                        import pyautogui
+                        if double:
+                            pyautogui.doubleClick()
+                        else:
+                            pyautogui.click()
                     self._verify_cursor(intended_x, intended_y, double=double, _retried=True)
                 else:
                     self._log(

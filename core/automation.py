@@ -225,16 +225,22 @@ class AutomationEngine:
         Refreshes the window position, optionally brings the game
         window to the foreground, validates the coordinates, ensures
         the cursor is at the correct position, then clicks.
+
+        After _ensure_cursor_pos the cursor is verified to be at the
+        right spot; we click *in place* so as not to re-move it (which
+        could undo the DPI compensation).
         """
         self._focus_and_validate(x, y, skip_focus)
         self._ensure_cursor_pos(x, y)
-        self.input.click(x, y)
+        self.input.click_in_place()
+        logger.debug("Automation click at (%d, %d)", x, y)
 
     def _double_click(self, x, y, *, skip_focus=False):
         """Double-click at absolute screen coordinates (x, y)."""
         self._focus_and_validate(x, y, skip_focus)
         self._ensure_cursor_pos(x, y)
-        self.input.double_click(x, y)
+        self.input.click_in_place(count=2)
+        logger.debug("Automation double-click at (%d, %d)", x, y)
 
     def _get_actual_cursor_pos(self):
         """Return (x, y) of the current cursor using native OS API."""
@@ -250,50 +256,66 @@ class AutomationEngine:
         import pyautogui
         return pyautogui.position()
 
-    def _ensure_cursor_pos(self, x, y, _retried=False):
+    def _ensure_cursor_pos(self, x, y):
         """Move cursor to (x, y) and verify it arrived before clicking.
 
-        On high-DPI displays pyautogui can mis-normalise coordinates,
-        landing the cursor far from the intended position.  This method
-        moves the cursor via the native OS API, then reads back the
-        position.  If the cursor is more than 5 px off, it retries once
-        with a small delay.
+        On high-DPI displays SetCursorPos can land the cursor at the
+        wrong physical pixel when DPI virtualisation is active.  This
+        method moves the cursor, reads back the actual position, and if
+        there is a mismatch it calculates a *compensated* coordinate so
+        the cursor actually ends up where intended.
+
+        The compensation formula is:
+            corrected = intended - (actual - intended) = 2*intended - actual
+        This mirrors the offset so the next SetCursorPos lands correctly.
+
+        Up to 3 attempts are made (initial + 2 corrections).
         """
-        try:
-            from core.input_handler import _set_cursor_pos
-            _set_cursor_pos(x, y)
-            time.sleep(0.02)  # brief settle time
+        from core.input_handler import _set_cursor_pos
 
-            actual_x, actual_y = self._get_actual_cursor_pos()
-            dx = actual_x - x
-            dy = actual_y - y
+        max_attempts = 3
+        target_x, target_y = int(x), int(y)
 
-            if abs(dx) > 5 or abs(dy) > 5:
-                if not _retried:
+        for attempt in range(max_attempts):
+            try:
+                _set_cursor_pos(target_x, target_y)
+                time.sleep(0.02)  # brief settle time
+
+                actual_x, actual_y = self._get_actual_cursor_pos()
+                dx = actual_x - x
+                dy = actual_y - y
+
+                if abs(dx) <= 5 and abs(dy) <= 5:
+                    logger.debug(
+                        "Cursor position OK (attempt %d): intended (%d,%d) "
+                        "actual (%d,%d)",
+                        attempt + 1, x, y, actual_x, actual_y,
+                    )
+                    return
+
+                if attempt < max_attempts - 1:
+                    # Compute compensated target: mirror the error
+                    target_x = int(2 * x - actual_x)
+                    target_y = int(2 * y - actual_y)
                     self._log(
-                        f"CURSOR MISMATCH before click: intended ({x},{y}) "
-                        f"actual ({actual_x},{actual_y}) delta=({dx:+d},{dy:+d}). "
-                        f"Repositioning cursor.",
+                        f"CURSOR MISMATCH (attempt {attempt + 1}): "
+                        f"intended ({x},{y}) actual ({actual_x},{actual_y}) "
+                        f"delta=({dx:+d},{dy:+d}). "
+                        f"Compensating → SetCursorPos({target_x},{target_y})",
                         "warning",
                     )
-                    time.sleep(0.05)
-                    _set_cursor_pos(x, y)
-                    time.sleep(0.05)
-                    self._ensure_cursor_pos(x, y, _retried=True)
+                    time.sleep(0.03)
                 else:
                     self._log(
-                        f"CURSOR STILL MISMATCHED after reposition: intended "
-                        f"({x},{y}) actual ({actual_x},{actual_y}) "
+                        f"CURSOR STILL MISMATCHED after {max_attempts} attempts: "
+                        f"intended ({x},{y}) actual ({actual_x},{actual_y}) "
                         f"delta=({dx:+d},{dy:+d}). DPI scaling issue persists.",
                         "warning",
                     )
-            else:
-                logger.debug(
-                    "Cursor position OK before click: intended (%d,%d) actual (%d,%d)",
-                    x, y, actual_x, actual_y,
-                )
-        except Exception as e:
-            logger.debug("Could not verify cursor position: %s", e)
+            except Exception as e:
+                logger.debug("Could not verify cursor position (attempt %d): %s",
+                             attempt + 1, e)
+                return
 
     def _focus_and_validate(self, x, y, skip_focus):
         """Shared logic for _click/_double_click."""

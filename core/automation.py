@@ -200,21 +200,24 @@ class AutomationEngine:
         """
         self._focus_and_validate(x, y, skip_focus)
         self.input.click(x, y)
-        self._verify_cursor(x, y)
+        self._verify_cursor(x, y, double=False)
 
     def _double_click(self, x, y, *, skip_focus=False):
         """Double-click at absolute screen coordinates (x, y)."""
         self._focus_and_validate(x, y, skip_focus)
         self.input.double_click(x, y)
-        self._verify_cursor(x, y)
+        self._verify_cursor(x, y, double=True)
 
-    def _verify_cursor(self, intended_x, intended_y, *, _retried=False):
+    def _verify_cursor(self, intended_x, intended_y, *, double=False, _retried=False):
         """Check actual cursor position after click and retry on mismatch.
 
         If the cursor ended up more than 5 px away from the intended
         position (common on high-DPI displays when pyautogui mis-
         normalises coordinates), we re-position via the native OS API
         and click again — once.
+
+        Args:
+            double: If True, retry with doubleClick() instead of click().
         """
         try:
             import pyautogui
@@ -223,16 +226,20 @@ class AutomationEngine:
             dy = actual_y - intended_y
             if abs(dx) > 5 or abs(dy) > 5:
                 if not _retried:
+                    action = "double-click" if double else "click"
                     self._log(
                         f"CURSOR MISMATCH: intended ({intended_x},{intended_y}) "
                         f"actual ({actual_x},{actual_y}) delta=({dx:+d},{dy:+d}). "
-                        f"Retrying with native cursor positioning.",
+                        f"Retrying {action} with native cursor positioning.",
                         "warning",
                     )
                     from core.input_handler import _set_cursor_pos
                     _set_cursor_pos(intended_x, intended_y)
-                    pyautogui.click()
-                    self._verify_cursor(intended_x, intended_y, _retried=True)
+                    if double:
+                        pyautogui.doubleClick()
+                    else:
+                        pyautogui.click()
+                    self._verify_cursor(intended_x, intended_y, double=double, _retried=True)
                 else:
                     self._log(
                         f"CURSOR STILL MISMATCHED after retry: intended "
@@ -253,6 +260,10 @@ class AutomationEngine:
         """Shared logic for _click/_double_click."""
         if not skip_focus and self._target_window_id:
             _set_foreground_window(self._target_window_id)
+            # Brief delay so the OS finishes the focus switch before we
+            # send mouse events — without this the first click can be
+            # swallowed by the window-activation itself.
+            time.sleep(0.15)
         # Warn if coordinates fall outside the known game window area
         if self._target_window_id:
             rect = get_window_rect(self._target_window_id)

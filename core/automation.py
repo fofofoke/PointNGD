@@ -51,6 +51,24 @@ def _set_foreground_window(hwnd):
             pass
 
 
+def _get_cursor_pos_win32():
+    """Get cursor position via Win32 GetCursorPos (physical pixels).
+
+    Returns (x, y) or None on failure.  Unlike pyautogui.position(),
+    this always returns physical pixel coordinates matching SetCursorPos.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        import ctypes.wintypes
+        pt = ctypes.wintypes.POINT()
+        ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+        return pt.x, pt.y
+    except Exception:
+        return None
+
+
 class AutomationEngine:
     """Executes the full Lineage Classic automation workflow.
 
@@ -230,11 +248,15 @@ class AutomationEngine:
             double: If True, retry with doubleClick() instead of click().
         """
         try:
-            # On Linux, use xdotool to get cursor position (same coordinate
-            # system as xdotool mousemove) to avoid false mismatches between
-            # pyautogui and xdotool coordinate spaces.
+            # Use native OS API to get cursor position (same coordinate
+            # system as SetCursorPos / xdotool mousemove) to avoid false
+            # mismatches caused by pyautogui DPI normalisation.
             actual_x, actual_y = None, None
-            if sys.platform == "linux":
+            if sys.platform == "win32":
+                pos = _get_cursor_pos_win32()
+                if pos:
+                    actual_x, actual_y = pos
+            elif sys.platform == "linux":
                 from core.input_handler import _xdotool_getmouselocation
                 pos = _xdotool_getmouselocation()
                 if pos:
@@ -254,11 +276,9 @@ class AutomationEngine:
                         f"Retrying {action} with native cursor positioning.",
                         "warning",
                     )
-                    from core.input_handler import _set_cursor_pos, _xdotool_click
+                    from core.input_handler import _set_cursor_pos, _native_click
                     _set_cursor_pos(intended_x, intended_y)
-                    if sys.platform == "linux":
-                        _xdotool_click(1, repeat=2 if double else 1)
-                    else:
+                    if not _native_click(1, repeat=2 if double else 1):
                         import pyautogui
                         if double:
                             pyautogui.doubleClick()

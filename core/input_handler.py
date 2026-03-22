@@ -39,6 +39,74 @@ def _set_cursor_pos(x, y):
     return False
 
 
+def _win32_click(button=1, *, repeat=1):
+    """Send mouse click via Win32 SendInput at the current cursor position.
+
+    Unlike pyautogui.click(), this does NOT re-read or re-position the
+    cursor, so it won't undo SetCursorPos on high-DPI displays.
+
+    Args:
+        button: 1=left, 2=middle, 3=right.
+        repeat: Number of clicks (2 for double-click).
+
+    Returns True on success, False on failure.
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        import ctypes.wintypes
+
+        MOUSEEVENTF_LEFTDOWN = 0x0002
+        MOUSEEVENTF_LEFTUP = 0x0004
+        MOUSEEVENTF_MIDDLEDOWN = 0x0020
+        MOUSEEVENTF_MIDDLEUP = 0x0040
+        MOUSEEVENTF_RIGHTDOWN = 0x0008
+        MOUSEEVENTF_RIGHTUP = 0x0010
+
+        flags = {
+            1: (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP),
+            2: (MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP),
+            3: (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP),
+        }
+        down_flag, up_flag = flags.get(button, flags[1])
+
+        class MOUSEINPUT(ctypes.Structure):
+            _fields_ = [
+                ("dx", ctypes.c_long), ("dy", ctypes.c_long),
+                ("mouseData", ctypes.wintypes.DWORD),
+                ("dwFlags", ctypes.wintypes.DWORD),
+                ("time", ctypes.wintypes.DWORD),
+                ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+            ]
+
+        class INPUT(ctypes.Structure):
+            _fields_ = [
+                ("type", ctypes.wintypes.DWORD),
+                ("mi", MOUSEINPUT),
+            ]
+
+        INPUT_MOUSE = 0
+
+        for _ in range(repeat):
+            # Mouse down
+            inp_down = INPUT()
+            inp_down.type = INPUT_MOUSE
+            inp_down.mi.dwFlags = down_flag
+            ctypes.windll.user32.SendInput(1, ctypes.byref(inp_down), ctypes.sizeof(INPUT))
+            # Mouse up
+            inp_up = INPUT()
+            inp_up.type = INPUT_MOUSE
+            inp_up.mi.dwFlags = up_flag
+            ctypes.windll.user32.SendInput(1, ctypes.byref(inp_up), ctypes.sizeof(INPUT))
+            if repeat > 1:
+                time.sleep(0.05)
+
+        return True
+    except Exception:
+        return False
+
+
 def _xdotool_click(button=1, *, repeat=1):
     """Click using xdotool at the current cursor position.
 
@@ -82,6 +150,19 @@ def _xdotool_getmouselocation():
     except Exception:
         pass
     return None
+
+
+def _native_click(button=1, *, repeat=1):
+    """Send a mouse click using the native OS API (Win32 / xdotool).
+
+    Avoids pyautogui's internal coordinate re-positioning which can
+    undo SetCursorPos on high-DPI Windows displays.
+    """
+    if sys.platform == "win32":
+        return _win32_click(button, repeat=repeat)
+    elif sys.platform == "linux":
+        return _xdotool_click(button, repeat=repeat)
+    return False
 
 
 def _copy_to_clipboard(text):
@@ -267,18 +348,14 @@ class SoftwareInput(InputHandler):
 
     def click(self, x, y):
         self._move(x, y)
-        if sys.platform == "linux" and _xdotool_click(1):
-            pass  # xdotool click is more reliable on Linux/X11
-        else:
-            self.pyautogui.click()  # click at current cursor position
+        if not _native_click(1):
+            self.pyautogui.click()  # fallback
         logger.debug(f"Software click at ({x}, {y})")
 
     def double_click(self, x, y):
         self._move(x, y)
-        if sys.platform == "linux" and _xdotool_click(1, repeat=2):
-            pass  # xdotool double-click is more reliable on Linux/X11
-        else:
-            self.pyautogui.doubleClick()  # double-click at current position
+        if not _native_click(1, repeat=2):
+            self.pyautogui.doubleClick()  # fallback
         logger.debug(f"Software double-click at ({x}, {y})")
 
     def type_text(self, text):

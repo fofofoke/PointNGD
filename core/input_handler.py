@@ -294,6 +294,11 @@ def _type_non_ascii(text, method="clipboard", paste_func=None):
 class InputHandler:
     """Abstract base for input methods."""
 
+    # When True, the handler positions the cursor itself (e.g. Arduino HID
+    # AbsoluteMouse).  AutomationEngine will skip _ensure_cursor_pos and
+    # pass coordinates directly to click()/double_click().
+    handles_positioning = False
+
     def __init__(self, korean_method="clipboard"):
         self.korean_method = korean_method
 
@@ -463,6 +468,10 @@ class ArduinoInput(InputHandler):
     Uses AbsoluteMouse (HID-Project library) for pixel-accurate positioning.
     Sends screen resolution on connect so Arduino can map coordinates correctly.
 
+    The CLICK/DBLCLICK commands handle positioning + clicking atomically
+    via USB HID, so handles_positioning is True — AutomationEngine will
+    pass coordinates directly instead of using SetCursorPos + click_in_place.
+
     Protocol: Send commands as text lines.
     Commands:
         CLICK x y         - Single click
@@ -473,6 +482,8 @@ class ArduinoInput(InputHandler):
         MOVE x y           - Move mouse
         SCREEN ox oy w h   - Set virtual desktop dimensions
     """
+
+    handles_positioning = True
 
     def __init__(self, port="COM3", baudrate=9600, korean_method="clipboard"):
         super().__init__(korean_method)

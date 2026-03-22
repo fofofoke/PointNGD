@@ -2,18 +2,58 @@
 import subprocess
 import logging
 import os
+import sys
+import shutil
 
 logger = logging.getLogger(__name__)
 
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GITHUB_REPO = "fofofoke/PointNGD"
 
+_git_path = None
+
+
+def _find_git():
+    """Find the git executable, searching common Windows paths if needed."""
+    global _git_path
+    if _git_path is not None:
+        return _git_path
+
+    # Try PATH first
+    found = shutil.which("git")
+    if found:
+        _git_path = found
+        return _git_path
+
+    # Common Windows install locations
+    if sys.platform == "win32":
+        candidates = [
+            os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"),
+                         "Git", "cmd", "git.exe"),
+            os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+                         "Git", "cmd", "git.exe"),
+            os.path.join(os.environ.get("LOCALAPPDATA", ""),
+                         "Programs", "Git", "cmd", "git.exe"),
+            r"C:\Git\cmd\git.exe",
+        ]
+        for path in candidates:
+            if path and os.path.isfile(path):
+                _git_path = path
+                return _git_path
+
+    raise FileNotFoundError(
+        "git executable not found. Please install Git and ensure it is in PATH.\n"
+        "Download: https://git-scm.com/download/win"
+    )
+
 
 def _run_git(*args):
     """Run a git command and return stdout."""
-    cmd = ["git"] + list(args)
+    git = _find_git()
+    cmd = [git] + list(args)
     result = subprocess.run(
-        cmd, cwd=REPO_DIR, capture_output=True, text=True, timeout=30
+        cmd, cwd=REPO_DIR, capture_output=True, text=True, timeout=30,
+        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
     )
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or f"git {args[0]} failed")

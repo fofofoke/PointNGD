@@ -17,28 +17,38 @@ logger = logging.getLogger(__name__)
 
 
 def _set_foreground_window(hwnd):
-    """Bring the target window to the foreground (Windows only).
+    """Bring the target window to the foreground.
 
-    Tries SetForegroundWindow first, falls back to simulating an Alt
-    key press (which satisfies the OS foreground-lock policy) and
-    retrying.
+    Windows: Tries SetForegroundWindow, falls back to simulating an Alt
+    key press (which satisfies the OS foreground-lock policy) and retrying.
+
+    Linux: Uses xdotool windowactivate to focus the window.
     """
-    if sys.platform != "win32":
-        return
-    try:
-        import ctypes
-        user32 = ctypes.windll.user32
-        # First attempt
-        if user32.SetForegroundWindow(int(hwnd)):
-            return
-        # OS may block SetForegroundWindow unless the calling thread
-        # owns the foreground lock.  A brief Alt press/release is the
-        # standard workaround.
-        user32.keybd_event(0x12, 0, 0, 0)       # Alt down
-        user32.keybd_event(0x12, 0, 0x0002, 0)  # Alt up
-        user32.SetForegroundWindow(int(hwnd))
-    except Exception:
-        pass
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            # First attempt
+            if user32.SetForegroundWindow(int(hwnd)):
+                return
+            # OS may block SetForegroundWindow unless the calling thread
+            # owns the foreground lock.  A brief Alt press/release is the
+            # standard workaround.
+            user32.keybd_event(0x12, 0, 0, 0)       # Alt down
+            user32.keybd_event(0x12, 0, 0x0002, 0)  # Alt up
+            user32.SetForegroundWindow(int(hwnd))
+        except Exception:
+            pass
+    elif sys.platform == "linux":
+        import subprocess
+        try:
+            subprocess.run(
+                ["xdotool", "windowactivate", "--sync", str(hwnd)],
+                check=True, timeout=3,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
 
 
 class AutomationEngine:
@@ -220,8 +230,19 @@ class AutomationEngine:
             double: If True, retry with doubleClick() instead of click().
         """
         try:
-            import pyautogui
-            actual_x, actual_y = pyautogui.position()
+            # On Linux, use xdotool to get cursor position (same coordinate
+            # system as xdotool mousemove) to avoid false mismatches between
+            # pyautogui and xdotool coordinate spaces.
+            actual_x, actual_y = None, None
+            if sys.platform == "linux":
+                from core.input_handler import _xdotool_getmouselocation
+                pos = _xdotool_getmouselocation()
+                if pos:
+                    actual_x, actual_y = pos
+            if actual_x is None:
+                import pyautogui
+                actual_x, actual_y = pyautogui.position()
+
             dx = actual_x - intended_x
             dy = actual_y - intended_y
             if abs(dx) > 5 or abs(dy) > 5:
@@ -233,12 +254,16 @@ class AutomationEngine:
                         f"Retrying {action} with native cursor positioning.",
                         "warning",
                     )
-                    from core.input_handler import _set_cursor_pos
+                    from core.input_handler import _set_cursor_pos, _xdotool_click
                     _set_cursor_pos(intended_x, intended_y)
-                    if double:
-                        pyautogui.doubleClick()
+                    if sys.platform == "linux":
+                        _xdotool_click(1, repeat=2 if double else 1)
                     else:
-                        pyautogui.click()
+                        import pyautogui
+                        if double:
+                            pyautogui.doubleClick()
+                        else:
+                            pyautogui.click()
                     self._verify_cursor(intended_x, intended_y, double=double, _retried=True)
                 else:
                     self._log(

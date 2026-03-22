@@ -39,6 +39,51 @@ def _set_cursor_pos(x, y):
     return False
 
 
+def _xdotool_click(button=1, *, repeat=1):
+    """Click using xdotool at the current cursor position.
+
+    More reliable than pyautogui on Linux/X11 because it generates
+    proper XTest events that game windows recognise.
+
+    Args:
+        button: Mouse button (1=left, 2=middle, 3=right).
+        repeat: Number of clicks (2 for double-click).
+
+    Returns True on success, False on failure.
+    """
+    try:
+        cmd = ["xdotool", "click", "--repeat", str(repeat),
+               "--delay", "50", str(button)]
+        subprocess.run(cmd, check=True, timeout=2,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except Exception:
+        return False
+
+
+def _xdotool_getmouselocation():
+    """Get current cursor position via xdotool.
+
+    Returns (x, y) or None on failure.
+    """
+    try:
+        output = subprocess.check_output(
+            ["xdotool", "getmouselocation"],
+            text=True, timeout=2, stderr=subprocess.DEVNULL,
+        )
+        # Output format: x:123 y:456 screen:0 window:789
+        parts = {}
+        for token in output.strip().split():
+            if ":" in token:
+                k, v = token.split(":", 1)
+                parts[k] = int(v)
+        if "x" in parts and "y" in parts:
+            return parts["x"], parts["y"]
+    except Exception:
+        pass
+    return None
+
+
 def _copy_to_clipboard(text):
     """Copy text to system clipboard (cross-platform)."""
     system = platform.system()
@@ -222,12 +267,18 @@ class SoftwareInput(InputHandler):
 
     def click(self, x, y):
         self._move(x, y)
-        self.pyautogui.click()  # click at current cursor position
+        if sys.platform == "linux" and _xdotool_click(1):
+            pass  # xdotool click is more reliable on Linux/X11
+        else:
+            self.pyautogui.click()  # click at current cursor position
         logger.debug(f"Software click at ({x}, {y})")
 
     def double_click(self, x, y):
         self._move(x, y)
-        self.pyautogui.doubleClick()  # double-click at current position
+        if sys.platform == "linux" and _xdotool_click(1, repeat=2):
+            pass  # xdotool double-click is more reliable on Linux/X11
+        else:
+            self.pyautogui.doubleClick()  # double-click at current position
         logger.debug(f"Software double-click at ({x}, {y})")
 
     def type_text(self, text):

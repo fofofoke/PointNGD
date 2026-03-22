@@ -8,7 +8,7 @@ import platform
 logger = logging.getLogger(__name__)
 
 
-def _set_cursor_pos(x, y):
+def _set_cursor_pos(x, y, *, window_id=None):
     """Move cursor to (x, y) using native OS API (physical pixels).
 
     On high-DPI displays pyautogui normalises coordinates via
@@ -18,6 +18,16 @@ def _set_cursor_pos(x, y):
     (assuming the process is already DPI-aware, which main.py ensures).
 
     On Linux we fall back to xdotool, then pyautogui.
+
+    Args:
+        x, y: Target coordinates (absolute screen coords, or
+              window-relative if *window_id* is given on Linux).
+        window_id: Optional X11 window id.  When provided on Linux,
+                   ``xdotool mousemove --window`` is used so the
+                   coordinates are interpreted relative to the window
+                   rather than the screen.  This avoids mismatches
+                   between ``xdotool getwindowgeometry`` and the actual
+                   display coordinate space (e.g. DPI scaling, Xwayland).
     """
     if sys.platform == "win32":
         try:
@@ -28,8 +38,12 @@ def _set_cursor_pos(x, y):
             pass
     elif sys.platform == "linux":
         try:
+            cmd = ["xdotool", "mousemove"]
+            if window_id is not None:
+                cmd += ["--window", str(window_id)]
+            cmd += ["--", str(int(x)), str(int(y))]
             subprocess.run(
-                ["xdotool", "mousemove", "--", str(int(x)), str(int(y))],
+                cmd,
                 check=True, timeout=2,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )

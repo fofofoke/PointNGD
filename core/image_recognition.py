@@ -71,6 +71,29 @@ class ImageRecognition:
         """Release any held resources."""
         pass
 
+    @staticmethod
+    def _dpi_scale(region, capture_shape):
+        """Return (scale_x, scale_y) to convert capture-pixel coords to
+        logical (region) coords.  Returns (1, 1) when no scaling is needed.
+
+        On high-DPI / scaled displays, ``mss`` may return a capture whose
+        pixel dimensions differ from the *logical* width/height requested
+        via the region dict.  All coordinate math in the pipeline uses the
+        logical space, so template-match results (which are in capture-pixel
+        space) must be scaled back.
+        """
+        cap_h, cap_w = capture_shape[:2]
+        if cap_w == region["w"] and cap_h == region["h"]:
+            return 1.0, 1.0
+        sx = region["w"] / cap_w
+        sy = region["h"] / cap_h
+        logger.warning(
+            "DPI scale detected: capture (%dx%d) != region (%dx%d). "
+            "Scale factors: (%.4f, %.4f)",
+            cap_w, cap_h, region["w"], region["h"], sx, sy,
+        )
+        return sx, sy
+
     def capture_screen(self, region=None):
         """Capture screen or a specific region.
         region: dict with x, y, w, h keys or None for full screen.
@@ -133,6 +156,9 @@ class ImageRecognition:
         screen = self.capture_screen(region)
         found, rel_x, rel_y, conf = self.find_template(screen, template_path, threshold)
         if found:
+            sx, sy = self._dpi_scale(region, screen.shape)
+            rel_x = round(rel_x * sx)
+            rel_y = round(rel_y * sy)
             abs_x = region["x"] + rel_x
             abs_y = region["y"] + rel_y
             logger.debug(
@@ -235,14 +261,18 @@ class ImageRecognition:
             return False, 0, 0, 0, -1
 
         screen = image if image is not None else self.capture_screen(region)
+        sx, sy = self._dpi_scale(region, screen.shape)
 
-        # Origin in region-local coordinates
+        # Origin in region-local coordinates (logical)
         if origin:
             ox = origin["x"] - region["x"]
             oy = origin["y"] - region["y"]
         else:
             ox = region["w"] // 2
             oy = region["h"] // 2
+        # Convert origin to capture-pixel space for distance calculations
+        ox_cap = round(ox / sx) if sx != 1 else ox
+        oy_cap = round(oy / sy) if sy != 1 else oy
 
         # Phase 1: HSV color filtering to create candidate mask
         hsv_mask = None
@@ -288,20 +318,20 @@ class ImageRecognition:
                 filtered.append(m)
 
         if filtered:
-            # Sort by distance from origin (closest first)
-            filtered.sort(key=lambda m: (m[0] - ox) ** 2 + (m[1] - oy) ** 2)
+            # Sort by distance from origin (closest first) — in capture-pixel space
+            filtered.sort(key=lambda m: (m[0] - ox_cap) ** 2 + (m[1] - oy_cap) ** 2)
 
             best = filtered[0]
-            abs_x = region["x"] + best[0]
-            abs_y = region["y"] + best[1]
+            abs_x = region["x"] + round(best[0] * sx)
+            abs_y = region["y"] + round(best[1] * sy)
             return True, abs_x, abs_y, best[2], best[3]
 
         # Phase 3: Fallback - if templates fail, use HSV centroids sorted by distance
         if hsv_mask is not None:
-            found, cx, cy = self._find_hsv_closest(hsv_mask, ox, oy, min_area=100)
+            found, cx, cy = self._find_hsv_closest(hsv_mask, ox_cap, oy_cap, min_area=100)
             if found:
-                abs_x = region["x"] + cx
-                abs_y = region["y"] + cy
+                abs_x = region["x"] + round(cx * sx)
+                abs_y = region["y"] + round(cy * sy)
                 return True, abs_x, abs_y, 0.5, -1
 
         best_conf = max((m[2] for m in all_matches), default=0.0)

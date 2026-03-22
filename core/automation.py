@@ -273,9 +273,33 @@ class AutomationEngine:
         This mirrors the offset so the next SetCursorPos lands correctly.
 
         Up to 3 attempts are made (initial + 2 corrections).
+
+        On Linux, if a target window is known, we use window-relative
+        movement (``xdotool mousemove --window``) which is immune to
+        coordinate-space mismatches between ``xdotool getwindowgeometry``
+        and the actual display (DPI scaling, Xwayland offsets, etc.).
         """
         from core.input_handler import _set_cursor_pos
 
+        # -- Linux window-relative path ------------------------------------
+        if sys.platform == "linux" and self._target_window_id:
+            win_rel_x = int(x - self._win_offset_x)
+            win_rel_y = int(y - self._win_offset_y)
+            _set_cursor_pos(
+                win_rel_x, win_rel_y,
+                window_id=self._target_window_id,
+            )
+            time.sleep(0.02)
+            logger.debug(
+                "Window-relative move: abs(%d,%d) -> win_rel(%d,%d) "
+                "[window=%s offset=(%d,%d)]",
+                x, y, win_rel_x, win_rel_y,
+                self._target_window_id,
+                self._win_offset_x, self._win_offset_y,
+            )
+            return
+
+        # -- Absolute path (Windows / no target window) --------------------
         max_attempts = 3
         target_x, target_y = int(x), int(y)
 

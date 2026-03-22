@@ -129,8 +129,14 @@ def _check_api():
     resp.raise_for_status()
     data = resp.json()
     remote_sha = data["sha"]
-    message = data["commit"]["message"].split("\n")[0]
     local_sha = _read_local_version()
+
+    # First run: no VERSION file means the user just downloaded the latest.
+    # Save the current remote SHA so future checks work correctly.
+    if not local_sha:
+        _write_local_version(remote_sha)
+        return {"has_update": False, "local_commit": remote_sha[:8],
+                "remote_commit": remote_sha[:8], "update_log": "", "error": None}
 
     if local_sha == remote_sha:
         return {"has_update": False, "local_commit": local_sha[:8],
@@ -146,17 +152,17 @@ def _check_api():
     log_lines = []
     if log_resp.ok:
         for c in log_resp.json():
+            if c["sha"] == local_sha:
+                break
             short = c["sha"][:8]
             msg = c["commit"]["message"].split("\n")[0]
             log_lines.append(f"{short} {msg}")
-            if c["sha"] == local_sha:
-                break
 
     return {
         "has_update": True,
-        "local_commit": local_sha[:8] if local_sha else "(unknown)",
+        "local_commit": local_sha[:8],
         "remote_commit": remote_sha[:8],
-        "update_log": "\n".join(log_lines) if log_lines else message,
+        "update_log": "\n".join(log_lines) if log_lines else data["commit"]["message"].split("\n")[0],
         "error": None,
     }
 

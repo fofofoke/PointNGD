@@ -9,6 +9,7 @@ from core.config import (load_config, save_config, list_profiles,
                           save_profile, load_profile, delete_profile)
 from core.telegram_notifier import TelegramNotifier
 from core.hotkeys import HotkeyManager
+from core import updater
 
 
 class MainWindow:
@@ -92,6 +93,10 @@ class MainWindow:
         tools_menu.add_separator()
         tools_menu.add_command(label="Scarecrow Detection Editor", command=self._open_scarecrow_editor)
         menubar.add_cascade(label="Tools", menu=tools_menu)
+
+        help_menu = tk.Menu(menubar, tearoff=0)
+        help_menu.add_command(label="Check for Updates", command=self._check_for_updates)
+        menubar.add_cascade(label="Help", menu=help_menu)
 
         # Notebook (tabs)
         notebook = ttk.Notebook(self.root)
@@ -1065,6 +1070,76 @@ class MainWindow:
             else:
                 # Unknown/transient state - keep polling
                 self.root.after(500, self._update_status)
+
+    # ------------------------------------------------------------------
+    # Update
+    # ------------------------------------------------------------------
+
+    def _check_for_updates(self):
+        """Check GitHub for updates and offer to apply them."""
+        self.status_var.set("Checking for updates...")
+        self.root.update_idletasks()
+
+        def _do_check():
+            result = updater.check_for_updates()
+            self.root.after(0, lambda: self._on_update_check_done(result))
+
+        threading.Thread(target=_do_check, daemon=True).start()
+
+    def _on_update_check_done(self, result):
+        self.status_var.set("Ready")
+
+        if result["error"]:
+            messagebox.showerror(
+                "Update Check Failed",
+                f"Could not check for updates:\n{result['error']}"
+            )
+            return
+
+        if not result["has_update"]:
+            messagebox.showinfo(
+                "No Updates",
+                f"You are on the latest version.\n(commit: {result['local_commit']})"
+            )
+            return
+
+        log = result["update_log"] or "(details unavailable)"
+        answer = messagebox.askyesno(
+            "Update Available",
+            f"A new update is available!\n\n"
+            f"Current: {result['local_commit']}\n"
+            f"Latest:  {result['remote_commit']}\n\n"
+            f"Changes:\n{log}\n\n"
+            f"Do you want to update now?"
+        )
+        if answer:
+            self._apply_update()
+
+    def _apply_update(self):
+        """Pull updates from GitHub."""
+        self.status_var.set("Updating...")
+        self.root.update_idletasks()
+
+        def _do_update():
+            result = updater.apply_update()
+            self.root.after(0, lambda: self._on_update_done(result))
+
+        threading.Thread(target=_do_update, daemon=True).start()
+
+    def _on_update_done(self, result):
+        self.status_var.set("Ready")
+
+        if result["success"]:
+            messagebox.showinfo(
+                "Update Complete",
+                "Update applied successfully!\n\n"
+                "Please restart the application to use the new version."
+            )
+        else:
+            messagebox.showerror(
+                "Update Failed",
+                f"Update failed:\n{result['message']}"
+            )
 
     def _on_close(self):
         if self.engine and self.engine.state in ("running", "paused"):

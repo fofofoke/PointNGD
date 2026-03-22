@@ -7,8 +7,33 @@ import shutil
 
 logger = logging.getLogger(__name__)
 
-REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GITHUB_REPO = "fofofoke/PointNGD"
+
+
+def _find_repo_dir():
+    """Find the git repository root by walking up from several starting points."""
+    # Starting candidates: parent of this file's dir, main script dir, cwd
+    candidates = [
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        os.path.dirname(os.path.abspath(sys.argv[0])) if sys.argv[0] else None,
+        os.getcwd(),
+    ]
+    for start in candidates:
+        if not start:
+            continue
+        d = os.path.abspath(start)
+        # Walk up to filesystem root looking for .git
+        for _ in range(20):
+            if os.path.isdir(os.path.join(d, ".git")):
+                return d
+            parent = os.path.dirname(d)
+            if parent == d:
+                break
+            d = parent
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+REPO_DIR = _find_repo_dir()
 
 _git_path = None
 

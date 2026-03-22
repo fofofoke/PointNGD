@@ -294,6 +294,11 @@ def _type_non_ascii(text, method="clipboard", paste_func=None):
 class InputHandler:
     """Abstract base for input methods."""
 
+    # When True, the handler positions the cursor itself (e.g. Arduino HID
+    # AbsoluteMouse).  AutomationEngine will skip _ensure_cursor_pos and
+    # pass coordinates directly to click()/double_click().
+    handles_positioning = False
+
     def __init__(self, korean_method="clipboard"):
         self.korean_method = korean_method
 
@@ -463,6 +468,10 @@ class ArduinoInput(InputHandler):
     Uses AbsoluteMouse (HID-Project library) for pixel-accurate positioning.
     Sends screen resolution on connect so Arduino can map coordinates correctly.
 
+    The CLICK/DBLCLICK commands handle positioning + clicking atomically
+    via USB HID, so handles_positioning is True — AutomationEngine will
+    pass coordinates directly instead of using SetCursorPos + click_in_place.
+
     Protocol: Send commands as text lines.
     Commands:
         CLICK x y         - Single click
@@ -473,6 +482,8 @@ class ArduinoInput(InputHandler):
         MOVE x y           - Move mouse
         SCREEN ox oy w h   - Set virtual desktop dimensions
     """
+
+    handles_positioning = True
 
     def __init__(self, port="COM3", baudrate=9600, korean_method="clipboard"):
         super().__init__(korean_method)
@@ -490,7 +501,10 @@ class ArduinoInput(InputHandler):
         self.serial.flush()
         # Wait for acknowledgement
         response = self.serial.readline().decode("utf-8").strip()
-        logger.debug(f"Arduino cmd: {command} -> {response}")
+        if not response:
+            logger.warning(f"Arduino NO RESPONSE for: {command}")
+        else:
+            logger.info(f"Arduino cmd: {command} -> {response}")
         time.sleep(0.05)
         return response
 
@@ -519,6 +533,7 @@ class ArduinoInput(InputHandler):
 
     def click(self, x, y):
         self._send(f"CLICK {x} {y}")
+        logger.info(f"Arduino click at ({x}, {y})")
 
     def click_in_place(self, count=1):
         """Click at current cursor position (Arduino falls back to native click)."""
@@ -526,7 +541,16 @@ class ArduinoInput(InputHandler):
             logger.warning("Arduino click_in_place: native click failed")
 
     def double_click(self, x, y):
-        self._send(f"DBLCLICK {x} {y}")
+        """Double-click via Arduino HID.
+
+        Uses two separate CLICK commands with a short delay instead of
+        DBLCLICK, because some games don't recognise the AbsoluteMouse
+        double-click event properly.
+        """
+        self._send(f"CLICK {x} {y}")
+        time.sleep(0.08)
+        self._send(f"CLICK {x} {y}")
+        logger.info(f"Arduino double-click (2xCLICK) at ({x}, {y})")
 
     def type_text(self, text):
         """Type text. Uses clipboard/SendInput for non-ASCII (Korean etc)."""

@@ -222,24 +222,27 @@ class AutomationEngine:
     def _click(self, x, y, *, skip_focus=False):
         """Click at absolute screen coordinates (x, y).
 
-        Refreshes the window position, optionally brings the game
-        window to the foreground, validates the coordinates, ensures
-        the cursor is at the correct position, then clicks.
-
-        After _ensure_cursor_pos the cursor is verified to be at the
-        right spot; we click *in place* so as not to re-move it (which
-        could undo the DPI compensation).
+        For handlers that position the cursor themselves (e.g. Arduino HID),
+        coordinates are passed directly to click().  For software handlers,
+        the cursor is first moved and verified via _ensure_cursor_pos, then
+        clicked in place so the verified position is not disturbed.
         """
         self._focus_and_validate(x, y, skip_focus)
-        self._ensure_cursor_pos(x, y)
-        self.input.click_in_place()
+        if self.input.handles_positioning:
+            self.input.click(x, y)
+        else:
+            self._ensure_cursor_pos(x, y)
+            self.input.click_in_place()
         logger.debug("Automation click at (%d, %d)", x, y)
 
     def _double_click(self, x, y, *, skip_focus=False):
         """Double-click at absolute screen coordinates (x, y)."""
         self._focus_and_validate(x, y, skip_focus)
-        self._ensure_cursor_pos(x, y)
-        self.input.click_in_place(count=2)
+        if self.input.handles_positioning:
+            self.input.double_click(x, y)
+        else:
+            self._ensure_cursor_pos(x, y)
+            self.input.click_in_place(count=2)
         logger.debug("Automation double-click at (%d, %d)", x, y)
 
     def _get_actual_cursor_pos(self):

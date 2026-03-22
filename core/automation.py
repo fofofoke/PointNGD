@@ -349,14 +349,14 @@ class AutomationEngine:
 
     def _wait_and_find(self, image_key, region_key, timeout=10, interval=0.5):
         """Wait for a template image to appear in a region.
-        Returns (found, abs_x, abs_y).
+        Returns (found, abs_x, abs_y, confidence).
         """
         template_path = self.config["images"].get(image_key, "")
         raw_roi = self.config["roi"].get(region_key)
         region = self._abs_roi(raw_roi)
         if not template_path:
             self._log(f"Warning: No image set for '{image_key}'", "warning")
-            return False, 0, 0
+            return False, 0, 0, 0.0
 
         logger.info(
             "wait_and_find: key='%s' template='%s' "
@@ -375,9 +375,9 @@ class AutomationEngine:
                 template_path, region
             )
             if found:
-                return True, ax, ay
+                return True, ax, ay, conf
             time.sleep(interval)
-        return False, 0, 0
+        return False, 0, 0, 0.0
 
     def _ocr_number_retry(self, region, retries=None):
         """OCR a number with retries for reliability.
@@ -671,11 +671,12 @@ class AutomationEngine:
         If verify_image_key is given, checks that the verify template appears
         after clicking.  Returns (True, x, y) or (False, 0, 0).
         """
-        found, x, y = self._wait_and_find(image_key, region_key, timeout=timeout)
+        found, x, y, conf = self._wait_and_find(image_key, region_key, timeout=timeout)
         if found:
             action = "double-click" if double else "click"
             self._log(
                 f"Found '{image_key}' -> {action} at ({x}, {y}) "
+                f"conf={conf:.3f} "
                 f"[win_offset=({self._win_offset_x}, {self._win_offset_y})]"
             )
             if double:
@@ -685,7 +686,7 @@ class AutomationEngine:
             # Post-click verification
             if verify_image_key and verify_region_key:
                 self._sleep(1)
-                v_found, _, _ = self._wait_and_find(
+                v_found, _, _, _ = self._wait_and_find(
                     verify_image_key, verify_region_key, timeout=verify_timeout
                 )
                 if not v_found:
@@ -773,7 +774,7 @@ class AutomationEngine:
         self._sleep(1)
 
         # Step 3: Double-click item (same as step 7)
-        found, ix, iy = self._wait_and_find("item_icon", "item_slot", timeout=10)
+        found, ix, iy, _ = self._wait_and_find("item_icon", "item_slot", timeout=10)
         if found:
             self._double_click(ix, iy)
             self._sleep(1)
@@ -782,7 +783,7 @@ class AutomationEngine:
             self._log("Item not found during death recovery!", "warning")
 
         # Step 4: Click popup text (same as step 8)
-        found, px, py = self._wait_and_find("popup_text", "popup_text", timeout=10)
+        found, px, py, _ = self._wait_and_find("popup_text", "popup_text", timeout=10)
         if found:
             self._click(px, py)
             self._sleep(1)
@@ -1100,7 +1101,7 @@ class AutomationEngine:
         # Click exit confirm
         self._refresh_window()
         exit_pos = self._abs_pos(self.config["click_positions"]["exit_confirm_click"])
-        found, x, y = self._wait_and_find("exit_button", "exit_button", timeout=5)
+        found, x, y, _ = self._wait_and_find("exit_button", "exit_button", timeout=5)
         if found:
             self._click(x, y)
         else:

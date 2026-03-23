@@ -679,6 +679,29 @@ class TestROIEditorLabels(unittest.TestCase):
                           f"ROI '{roi_key}' maps to image key '{image_key}' "
                           f"which is not in DEFAULT_CONFIG['images']")
 
+    def test_shared_roi_entries_are_capturable(self):
+        """All SHARED_ROI keys must be in CAPTURABLE_ROIS."""
+        from gui.roi_editor import ROIEditor
+        for key in ROIEditor.SHARED_ROI:
+            self.assertIn(key, ROIEditor.CAPTURABLE_ROIS,
+                          f"SHARED_ROI key '{key}' not in CAPTURABLE_ROIS")
+
+    def test_shared_roi_parents_exist_in_config(self):
+        """SHARED_ROI parent keys must exist in DEFAULT_CONFIG['roi']."""
+        from gui.roi_editor import ROIEditor
+        from core.config import DEFAULT_CONFIG
+        for key, parent in ROIEditor.SHARED_ROI.items():
+            self.assertIn(parent, DEFAULT_CONFIG["roi"],
+                          f"SHARED_ROI parent '{parent}' for '{key}' "
+                          f"not in DEFAULT_CONFIG['roi']")
+
+    def test_shared_roi_keys_have_labels(self):
+        """All SHARED_ROI keys must have entries in ROI_LABELS."""
+        from gui.roi_editor import ROIEditor
+        for key in ROIEditor.SHARED_ROI:
+            self.assertIn(key, ROIEditor.ROI_LABELS,
+                          f"SHARED_ROI key '{key}' missing from ROI_LABELS")
+
 
 @unittest.skipUnless(
     __import__("importlib").util.find_spec("tkinter"),

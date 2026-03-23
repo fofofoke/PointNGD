@@ -43,7 +43,15 @@ class ROIEditor(tk.Toplevel):
         "popup_text": "Popup Text Area",
         "scarecrow_search": "Scarecrow Search Area",
         "level_display": "Level Display Area",
+        "level_5": "Level 5 Template (uses Level Display ROI)",
         "mp_display": "MP Display Area",
+        "mp_2": "MP 2 Template (uses MP Display ROI)",
+        "mp_3": "MP 3 Template (uses MP Display ROI)",
+        "mp_4": "MP 4 Template (uses MP Display ROI)",
+        "mp_5": "MP 5 Template (uses MP Display ROI)",
+        "mp_6": "MP 6 Template (uses MP Display ROI)",
+        "mp_7": "MP 7 Template (uses MP Display ROI)",
+        "mp_8": "MP 8 Template (uses MP Display ROI)",
         "exit_button": "Exit Button Area",
         "delete_popup": "Delete Popup Area",
         "exp_display": "EXP Display Area (Stuck Detection)",
@@ -55,6 +63,21 @@ class ROIEditor(tk.Toplevel):
         "empty_slot", "knight_icon", "knight_verify", "confirm_button",
         "item_slot", "popup_text", "scarecrow_search", "level_display",
         "mp_display", "exit_button", "delete_popup",
+        "level_5", "mp_2", "mp_3", "mp_4", "mp_5", "mp_6", "mp_7", "mp_8",
+    }
+
+    # Template-only entries that share another entry's ROI coordinates.
+    # These keys have no own ROI in config["roi"]; they borrow from the
+    # parent ROI for capture/test but store a separate template image.
+    SHARED_ROI = {
+        "level_5": "level_display",
+        "mp_2": "mp_display",
+        "mp_3": "mp_display",
+        "mp_4": "mp_display",
+        "mp_5": "mp_display",
+        "mp_6": "mp_display",
+        "mp_7": "mp_display",
+        "mp_8": "mp_display",
     }
 
     # Map ROI key -> image config key (where names differ)
@@ -117,6 +140,14 @@ class ROIEditor(tk.Toplevel):
     def _image_key_for(self, roi_key):
         """Return the config['images'] key that corresponds to *roi_key*."""
         return self.ROI_TO_IMAGE_KEY.get(roi_key, roi_key)
+
+    def _effective_roi_key(self, key):
+        """Return the actual config['roi'] key to use for coordinates.
+
+        Template-only entries (level_5, mp_2~mp_8) share the ROI of their
+        parent entry (level_display, mp_display).
+        """
+        return self.SHARED_ROI.get(key, key)
 
     def _has_template(self, roi_key):
         """Return True if a template image file exists for *roi_key*."""
@@ -241,7 +272,8 @@ class ROIEditor(tk.Toplevel):
 
     def _roi_status(self, key):
         """Return a short status tag for the listbox entry."""
-        roi = self.config["roi"].get(key, {})
+        effective_key = self._effective_roi_key(key)
+        roi = self.config["roi"].get(effective_key, {})
         has_roi = roi.get("w", 0) > 10
         has_img = self._has_template(key) if key in self.CAPTURABLE_ROIS else None
 
@@ -390,9 +422,13 @@ class ROIEditor(tk.Toplevel):
             return
         idx = selection[0]
         self.current_roi_key = list(self.ROI_LABELS.keys())[idx]
-        roi = self.config["roi"].get(self.current_roi_key, {})
+        effective_key = self._effective_roi_key(self.current_roi_key)
+        roi = self.config["roi"].get(effective_key, {})
+        shared_note = ""
+        if self.current_roi_key in self.SHARED_ROI:
+            shared_note = f"\n(shares ROI with '{effective_key}')"
         self.roi_info_var.set(
-            f"{self.ROI_LABELS[self.current_roi_key]}\n"
+            f"{self.ROI_LABELS[self.current_roi_key]}{shared_note}\n"
             f"X={roi.get('x', 0)}, Y={roi.get('y', 0)}, "
             f"W={roi.get('w', 0)}, H={roi.get('h', 0)}"
         )
@@ -477,7 +513,11 @@ class ROIEditor(tk.Toplevel):
             self.drag_start = None
             return
 
-        self.config["roi"][self.current_roi_key] = {
+        effective_key = self._effective_roi_key(self.current_roi_key)
+        is_shared = self.current_roi_key in self.SHARED_ROI
+
+        # For shared entries (level_5, mp_2~mp_8), update the parent ROI
+        self.config["roi"][effective_key] = {
             "x": real_x, "y": real_y, "w": real_w, "h": real_h
         }
         # Record DPI scale alongside ROI for auto-adjustment on DPI change
@@ -486,8 +526,9 @@ class ROIEditor(tk.Toplevel):
         self.config.setdefault("capture_dpi_scale", {})["roi"] = scale
 
         coord_type = "window-relative" if self._window_id else "screen"
+        shared_note = f" (-> {effective_key})" if is_shared else ""
         self.roi_info_var.set(
-            f"{self.ROI_LABELS[self.current_roi_key]}\n"
+            f"{self.ROI_LABELS[self.current_roi_key]}{shared_note}\n"
             f"X={real_x}, Y={real_y}, W={real_w}, H={real_h} ({coord_type})"
         )
         self.manual_vars["x"].set(str(real_x))
@@ -496,14 +537,22 @@ class ROIEditor(tk.Toplevel):
         self.manual_vars["h"].set(str(real_h))
 
         center_updated = self._maybe_set_click_position_from_roi(
-            self.current_roi_key, self.config["roi"][self.current_roi_key]
+            effective_key, self.config["roi"][effective_key]
         )
 
         # Auto-capture template image ONLY when no template exists yet.
-        # If a template already exists, just update ROI coordinates.
+        # For shared entries (template-only), always capture the template
+        # since the drag's primary purpose is to capture the template image.
         saved_msg = ""
         if self.screenshot and self.current_roi_key in self.CAPTURABLE_ROIS:
-            if self._has_template(self.current_roi_key):
+            if is_shared:
+                # Shared entries: always capture template (that's the whole point)
+                cropped = self.screenshot.crop((
+                    real_x, real_y, real_x + real_w, real_y + real_h,
+                ))
+                self._save_template_image(cropped)
+                saved_msg = " + template saved"
+            elif self._has_template(self.current_roi_key):
                 saved_msg = " (ROI only, template kept)"
             else:
                 cropped = self.screenshot.crop((
@@ -557,11 +606,12 @@ class ROIEditor(tk.Toplevel):
             messagebox.showerror("Error", "Invalid coordinates")
             return
 
-        self.config["roi"][self.current_roi_key] = {"x": x, "y": y, "w": w, "h": h}
+        effective = self._effective_roi_key(self.current_roi_key)
+        self.config["roi"][effective] = {"x": x, "y": y, "w": w, "h": h}
         self._auto_save()
         self._refresh_listbox()
         self._display_screenshot()
-        self.status_var.set(f"ROI '{self.current_roi_key}' manually set")
+        self.status_var.set(f"ROI '{effective}' manually set")
 
     # ------------------------------------------------------------------
     # Template image: replace / load
@@ -591,7 +641,8 @@ class ROIEditor(tk.Toplevel):
             messagebox.showwarning("Warning", "Capture the screen first")
             return
 
-        roi = self.config["roi"].get(self.current_roi_key, {})
+        effective = self._effective_roi_key(self.current_roi_key)
+        roi = self.config["roi"].get(effective, {})
         if roi.get("w", 0) <= 5 or roi.get("h", 0) <= 5:
             messagebox.showwarning("Warning", "ROI is too small. Drag to set the region first.")
             return
@@ -617,7 +668,8 @@ class ROIEditor(tk.Toplevel):
             messagebox.showinfo("Info", "This ROI is not associated with a template image.")
             return
 
-        roi = self.config["roi"].get(self.current_roi_key, {})
+        effective = self._effective_roi_key(self.current_roi_key)
+        roi = self.config["roi"].get(effective, {})
         if roi.get("w", 0) <= 5 or roi.get("h", 0) <= 5:
             messagebox.showwarning("Warning", "ROI is too small. Set the region first.")
             return
@@ -681,7 +733,8 @@ class ROIEditor(tk.Toplevel):
         dest = os.path.join(self.images_dir, f"{image_key}{ext}")
         shutil.copy2(filepath, dest)
         self.config.setdefault("images", {})[image_key] = dest
-        roi = self.config.get("roi", {}).get(self.current_roi_key, {})
+        effective = self._effective_roi_key(self.current_roi_key)
+        roi = self.config.get("roi", {}).get(effective, {})
         self._maybe_set_click_position_from_roi(self.current_roi_key, roi)
 
         self._auto_save()
@@ -704,7 +757,8 @@ class ROIEditor(tk.Toplevel):
             messagebox.showwarning("Warning", f"No template image for '{image_key}'.")
             return
 
-        roi = self.config.get("roi", {}).get(self.current_roi_key, {})
+        effective = self._effective_roi_key(self.current_roi_key)
+        roi = self.config.get("roi", {}).get(effective, {})
         if roi.get("w", 0) <= 5 or roi.get("h", 0) <= 5:
             messagebox.showwarning("Warning", "ROI is too small. Set the ROI first.")
             return

@@ -357,6 +357,11 @@ class AutomationEngine:
                 dy = actual_y - y
 
                 if abs(dx) <= 5 and abs(dy) <= 5:
+                    if attempt > 0:
+                        self._log(
+                            f"Cursor position corrected (attempt {attempt + 1}): "
+                            f"intended ({x},{y}) actual ({actual_x},{actual_y})"
+                        )
                     logger.debug(
                         "Cursor position OK (attempt %d): intended (%d,%d) "
                         "actual (%d,%d)",
@@ -744,10 +749,14 @@ class AutomationEngine:
         found, x, y, conf = self._wait_and_find(image_key, region_key, timeout=timeout)
         if found:
             action = "double-click" if double else "click"
+            raw_roi = self.config["roi"].get(region_key)
+            abs_region = self._abs_roi(raw_roi)
             self._log(
                 f"Found '{image_key}' -> {action} at ({x}, {y}) "
                 f"conf={conf:.3f} "
-                f"[win_offset=({self._win_offset_x}, {self._win_offset_y})]"
+                f"[win_offset=({self._win_offset_x}, {self._win_offset_y}) "
+                f"dpi_ratio={self._roi_dpi_ratio:.3f} "
+                f"raw_roi={raw_roi} abs_roi={abs_region}]"
             )
             if double:
                 self._double_click(x, y)

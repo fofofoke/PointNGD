@@ -124,6 +124,8 @@ class AutomationEngine:
         self._win_offset_x = 0
         self._win_offset_y = 0
         self._target_window_id = None
+        # DPI ratio for scaling ROI/click coordinates (runtime / capture)
+        self._roi_dpi_ratio = 1.0
 
         # Error screenshot directory
         self._error_ss_dir = config.get("error_screenshot_dir", "error_screenshots")
@@ -165,6 +167,42 @@ class AutomationEngine:
                 break
             time.sleep(min(0.1, remaining))
 
+    def _configure_dpi_scaling(self):
+        """Detect DPI mismatch between capture-time and runtime.
+
+        If the user changed their display scaling since templates were
+        captured, this configures the image recogniser to auto-resize
+        templates so they still match.
+        """
+        from gui.window_utils import get_dpi_scale
+
+        capture_scales = self.config.get("capture_dpi_scale", {})
+        if not capture_scales:
+            return  # No saved DPI info — templates were captured before this feature
+
+        # Use the ROI scale or the first template scale as representative
+        capture_scale = capture_scales.get("roi")
+        if capture_scale is None:
+            for v in capture_scales.values():
+                if isinstance(v, (int, float)) and v > 0:
+                    capture_scale = v
+                    break
+        if not capture_scale:
+            return
+
+        runtime_scale = get_dpi_scale(self._target_window_id)
+        self.recognizer.set_template_dpi_ratio(capture_scale, runtime_scale)
+        self._roi_dpi_ratio = runtime_scale / capture_scale
+
+        if abs(runtime_scale - capture_scale) > 0.01:
+            self._log(
+                f"DPI changed: captured at {capture_scale:.0%}, "
+                f"current {runtime_scale:.0%}. "
+                f"Templates will be auto-resized. "
+                f"For best accuracy, recapture in ROI Editor.",
+                "warning",
+            )
+
     def _refresh_window(self):
         """Refresh target window position. Returns True if OK."""
         title = self.config.get("target_window_title", "")
@@ -192,23 +230,29 @@ class AutomationEngine:
         return True
 
     def _abs_roi(self, roi):
-        """Convert window-relative ROI dict to absolute screen ROI."""
+        """Convert window-relative ROI dict to absolute screen ROI.
+
+        When the DPI scale has changed since capture, coordinates are
+        rescaled so they point to the same logical area on screen.
+        """
         if not roi:
             return roi
+        r = self._roi_dpi_ratio
         return {
-            "x": roi["x"] + self._win_offset_x,
-            "y": roi["y"] + self._win_offset_y,
-            "w": roi["w"],
-            "h": roi["h"],
+            "x": round(roi["x"] * r) + self._win_offset_x,
+            "y": round(roi["y"] * r) + self._win_offset_y,
+            "w": round(roi["w"] * r),
+            "h": round(roi["h"] * r),
         }
 
     def _abs_pos(self, pos):
         """Convert window-relative position dict to absolute screen position."""
         if not pos:
             return pos
+        r = self._roi_dpi_ratio
         return {
-            "x": pos["x"] + self._win_offset_x,
-            "y": pos["y"] + self._win_offset_y,
+            "x": round(pos["x"] * r) + self._win_offset_x,
+            "y": round(pos["y"] * r) + self._win_offset_y,
         }
 
     # ------------------------------------------------------------------
@@ -500,6 +544,8 @@ class AutomationEngine:
             if not self._refresh_window():
                 self._log("Cannot find target window. Check 'Target Window' setting.", "error")
                 return
+            # Configure template DPI scaling for runtime
+            self._configure_dpi_scaling()
             # Log full coordinate diagnostic on startup
             rect = get_window_rect(self._target_window_id) if self._target_window_id else None
             self._log(

@@ -467,6 +467,10 @@ class ROIEditor(tk.Toplevel):
         self.config["roi"][self.current_roi_key] = {
             "x": real_x, "y": real_y, "w": real_w, "h": real_h
         }
+        # Record DPI scale alongside ROI for auto-adjustment on DPI change
+        from gui.window_utils import get_dpi_scale
+        scale = get_dpi_scale(self._window_id)
+        self.config.setdefault("capture_dpi_scale", {})["roi"] = scale
 
         coord_type = "window-relative" if self._window_id else "screen"
         self.roi_info_var.set(
@@ -534,6 +538,11 @@ class ROIEditor(tk.Toplevel):
         dest = os.path.join(self.images_dir, f"{image_key}.png")
         image.save(dest)
         self.config.setdefault("images", {})[image_key] = dest
+        # Record current DPI scale so templates can be auto-resized at
+        # runtime if the user changes their display scaling.
+        from gui.window_utils import get_dpi_scale
+        scale = get_dpi_scale(self._window_id)
+        self.config.setdefault("capture_dpi_scale", {})[image_key] = scale
 
     def _replace_image_from_screenshot(self):
         """Crop the selected ROI from the stored screenshot and save as template."""

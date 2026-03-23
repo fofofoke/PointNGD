@@ -66,10 +66,60 @@ class ImageRecognition:
 
     def __init__(self):
         self.match_threshold = 0.8
+        # DPI scale ratio: runtime_dpi / capture_dpi.
+        # When > 1 templates are upscaled; when < 1 they are downscaled.
+        # Set by AutomationEngine at start based on config["capture_dpi_scale"].
+        self._template_dpi_ratio = 1.0
+        self._resized_cache: dict[str, "np.ndarray"] = {}
+
+    def set_template_dpi_ratio(self, capture_scale: float, runtime_scale: float):
+        """Configure the DPI ratio used to auto-resize templates.
+
+        Args:
+            capture_scale: DPI scale when templates were captured (e.g. 1.5).
+            runtime_scale: Current DPI scale (e.g. 1.0).
+        """
+        if capture_scale > 0 and runtime_scale > 0:
+            self._template_dpi_ratio = runtime_scale / capture_scale
+        else:
+            self._template_dpi_ratio = 1.0
+        self._resized_cache.clear()
+        if abs(self._template_dpi_ratio - 1.0) > 0.01:
+            logger.info(
+                "Template DPI ratio set to %.3f (capture=%.2f, runtime=%.2f)",
+                self._template_dpi_ratio, capture_scale, runtime_scale,
+            )
+
+    def _load_template(self, template_path):
+        """Load a template image, applying DPI resize if needed.
+
+        Results are cached so the resize only happens once per path.
+        """
+        if template_path in self._resized_cache:
+            return self._resized_cache[template_path]
+
+        template = cv2.imread(template_path, cv2.IMREAD_COLOR)
+        if template is None:
+            return None
+
+        ratio = self._template_dpi_ratio
+        if abs(ratio - 1.0) > 0.01:
+            h, w = template.shape[:2]
+            new_w = max(1, round(w * ratio))
+            new_h = max(1, round(h * ratio))
+            template = cv2.resize(template, (new_w, new_h),
+                                  interpolation=cv2.INTER_LANCZOS4)
+            logger.debug(
+                "Template resized for DPI: %s (%dx%d -> %dx%d, ratio=%.3f)",
+                template_path, w, h, new_w, new_h, ratio,
+            )
+
+        self._resized_cache[template_path] = template
+        return template
 
     def close(self):
         """Release any held resources."""
-        pass
+        self._resized_cache.clear()
 
     @staticmethod
     def _dpi_scale(region, capture_shape):
@@ -134,7 +184,7 @@ class ImageRecognition:
             return False, 0, 0, 0
 
         threshold = threshold or self.match_threshold
-        template = cv2.imread(template_path, cv2.IMREAD_COLOR)
+        template = self._load_template(template_path)
         if template is None:
             return False, 0, 0, 0
 
@@ -179,7 +229,7 @@ class ImageRecognition:
             return []
 
         threshold = threshold or self.match_threshold
-        template = cv2.imread(template_path, cv2.IMREAD_COLOR)
+        template = self._load_template(template_path)
         if template is None:
             return []
 
@@ -287,7 +337,7 @@ class ImageRecognition:
         for idx, tmpl_path in enumerate(templates):
             if not tmpl_path or not os.path.exists(tmpl_path):
                 continue
-            template = cv2.imread(tmpl_path, cv2.IMREAD_COLOR)
+            template = self._load_template(tmpl_path)
             if template is None:
                 continue
 

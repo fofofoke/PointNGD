@@ -136,6 +136,44 @@ def capture_window_by_title(title_substring):
     return img, rect, wid
 
 
+def get_dpi_scale(window_id=None):
+    """Return the DPI scale factor for the given window (or primary monitor).
+
+    On Windows, queries the effective DPI for the monitor that the window
+    is on (Per-Monitor DPI) and divides by the baseline 96 DPI.
+    Returns a float, e.g. 1.0 for 100%, 1.5 for 150%, 2.0 for 200%.
+
+    On Linux / when detection fails, returns 1.0.
+    """
+    if sys.platform != "win32":
+        return 1.0
+    try:
+        import ctypes
+        # MonitorFromWindow → MONITOR_DEFAULTTONEAREST = 2
+        user32 = ctypes.windll.user32
+        shcore = ctypes.windll.shcore
+        hwnd = int(window_id) if window_id else 0
+        monitor = user32.MonitorFromWindow(hwnd, 2)
+        dpi_x = ctypes.c_uint()
+        dpi_y = ctypes.c_uint()
+        # MDT_EFFECTIVE_DPI = 0
+        hr = shcore.GetDpiForMonitor(monitor, 0,
+                                     ctypes.byref(dpi_x), ctypes.byref(dpi_y))
+        if hr == 0:
+            return dpi_x.value / 96.0
+    except Exception:
+        pass
+    # Fallback: try GetDpiForWindow (Windows 10 1607+)
+    try:
+        import ctypes
+        dpi = ctypes.windll.user32.GetDpiForWindow(int(window_id or 0))
+        if dpi > 0:
+            return dpi / 96.0
+    except Exception:
+        pass
+    return 1.0
+
+
 # ---------------------------------------------------------------------------
 # Windows implementation
 # ---------------------------------------------------------------------------

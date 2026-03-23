@@ -21,6 +21,7 @@ except ImportError:
     logger.warning("mss not installed. Screen capture will be unavailable.")
 
 from gui.window_utils import find_windows_by_title, get_window_rect, capture_window, list_all_windows
+from core.image_recognition import ImageRecognition
 
 
 class ROIEditor(tk.Toplevel):
@@ -64,6 +65,13 @@ class ROIEditor(tk.Toplevel):
         "delete_popup": "delete_popup",
     }
 
+    # ROI key -> click_positions key to auto-fill using ROI center.
+    ROI_TO_CLICK_KEY = {
+        "knight_verify": "knight_verify_click",
+        "empty_slot": "character_slot_click",
+        "scarecrow_search": "after_enter_click",
+    }
+
     def __init__(self, parent, config, images_dir="images", on_save=None):
         super().__init__(parent)
         self.title("ROI & Image Editor")
@@ -77,6 +85,7 @@ class ROIEditor(tk.Toplevel):
         self.drag_rect = None
         self.scale_factor = 1.0
         self._preview_photo = None
+        self.recognizer = ImageRecognition()
         # Window-relative mode
         self._window_id = None
         self._window_rect = None  # {"x","y","w","h"} of target window on screen
@@ -191,6 +200,10 @@ class ROIEditor(tk.Toplevel):
         ttk.Button(
             img_frame, text="Load from File...",
             command=self._load_image_from_file,
+        ).pack(fill=tk.X, padx=5, pady=2)
+        ttk.Button(
+            img_frame, text="Test Matching (Current ROI)",
+            command=self._test_template_matching,
         ).pack(fill=tk.X, padx=5, pady=2)
 
         self.preview_canvas = tk.Canvas(img_frame, bg="gray30",
@@ -482,6 +495,10 @@ class ROIEditor(tk.Toplevel):
         self.manual_vars["w"].set(str(real_w))
         self.manual_vars["h"].set(str(real_h))
 
+        center_updated = self._maybe_set_click_position_from_roi(
+            self.current_roi_key, self.config["roi"][self.current_roi_key]
+        )
+
         # Auto-capture template image ONLY when no template exists yet.
         # If a template already exists, just update ROI coordinates.
         saved_msg = ""
@@ -503,7 +520,25 @@ class ROIEditor(tk.Toplevel):
         self.status_var.set(
             f"ROI '{self.current_roi_key}' updated: {real_x},{real_y} "
             f"{real_w}x{real_h}{saved_msg}"
+            + (" + click center auto-set" if center_updated else "")
         )
+
+    def _maybe_set_click_position_from_roi(self, roi_key, roi):
+        """Auto-fill mapped click position from ROI center if unset."""
+        click_key = self.ROI_TO_CLICK_KEY.get(roi_key)
+        if not click_key or not roi:
+            return False
+
+        click_positions = self.config.setdefault("click_positions", {})
+        cur = click_positions.get(click_key, {"x": 0, "y": 0})
+        if cur.get("x", 0) != 0 or cur.get("y", 0) != 0:
+            return False
+
+        click_positions[click_key] = {
+            "x": int(roi["x"] + roi["w"] / 2),
+            "y": int(roi["y"] + roi["h"] / 2),
+        }
+        return True
 
     # ------------------------------------------------------------------
     # Manual ROI entry
@@ -646,11 +681,69 @@ class ROIEditor(tk.Toplevel):
         dest = os.path.join(self.images_dir, f"{image_key}{ext}")
         shutil.copy2(filepath, dest)
         self.config.setdefault("images", {})[image_key] = dest
+        roi = self.config.get("roi", {}).get(self.current_roi_key, {})
+        self._maybe_set_click_position_from_roi(self.current_roi_key, roi)
 
         self._auto_save()
         self._refresh_listbox()
         self._update_preview()
         self.status_var.set(f"Loaded template from file for '{self.current_roi_key}'")
+
+    def _test_template_matching(self):
+        """Test template matching for the currently selected ROI in GUI."""
+        if self.current_roi_key is None:
+            messagebox.showwarning("Warning", "Select a ROI from the list first")
+            return
+        if self.current_roi_key not in self.CAPTURABLE_ROIS:
+            messagebox.showinfo("Info", "This ROI has no template matching target.")
+            return
+
+        image_key = self._image_key_for(self.current_roi_key)
+        template_path = self.config.get("images", {}).get(image_key, "")
+        if not template_path or not os.path.exists(template_path):
+            messagebox.showwarning("Warning", f"No template image for '{image_key}'.")
+            return
+
+        roi = self.config.get("roi", {}).get(self.current_roi_key, {})
+        if roi.get("w", 0) <= 5 or roi.get("h", 0) <= 5:
+            messagebox.showwarning("Warning", "ROI is too small. Set the ROI first.")
+            return
+
+        self._resolve_target_window()
+        if not self._window_id:
+            messagebox.showerror("Error", "Target window not found.")
+            return
+
+        img, _rect = capture_window(self._window_id)
+        if img is None:
+            messagebox.showerror("Error", "Failed to capture target window.")
+            return
+
+        import cv2
+        import numpy as np
+
+        cropped = img.crop((roi["x"], roi["y"], roi["x"] + roi["w"], roi["y"] + roi["h"]))
+        bgr = cv2.cvtColor(np.array(cropped), cv2.COLOR_RGB2BGR)
+        found, rel_x, rel_y, conf = self.recognizer.find_template(bgr, template_path)
+        if found:
+            messagebox.showinfo(
+                "Matching Test",
+                f"Match found!\n"
+                f"ROI: {self.current_roi_key}\n"
+                f"Position: ({rel_x}, {rel_y}) [ROI-relative]\n"
+                f"Confidence: {conf:.3f}",
+            )
+            self.status_var.set(
+                f"Template matched in '{self.current_roi_key}': ({rel_x}, {rel_y}), conf={conf:.3f}"
+            )
+        else:
+            messagebox.showwarning(
+                "Matching Test",
+                f"No match found.\nROI: {self.current_roi_key}\nBest confidence: {conf:.3f}",
+            )
+            self.status_var.set(
+                f"No match in '{self.current_roi_key}' (best conf={conf:.3f})"
+            )
 
 
 # ======================================================================

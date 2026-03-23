@@ -369,6 +369,17 @@ class MainWindow:
                   "MP/level reading accuracy. Error screenshots auto-saved.",
                   foreground="gray").pack(anchor=tk.W, padx=10, pady=2)
 
+        threshold_row = ttk.Frame(retry_frame)
+        threshold_row.pack(fill=tk.X, padx=10, pady=2)
+        ttk.Label(threshold_row, text="Strict template threshold:", width=25).pack(side=tk.LEFT)
+        self.strict_threshold_var = tk.StringVar(value="0.9")
+        ttk.Entry(threshold_row, textvariable=self.strict_threshold_var, width=8).pack(
+            side=tk.LEFT, padx=5)
+        ttk.Button(
+            threshold_row, text="Image Thresholds...",
+            command=self._open_image_threshold_editor,
+        ).pack(side=tk.LEFT, padx=8)
+
         # Hotkeys
         hotkey_frame = ttk.LabelFrame(scroll_frame, text="Global Hotkeys")
         hotkey_frame.pack(fill=tk.X, padx=10, pady=5)
@@ -856,6 +867,9 @@ class MainWindow:
             "retry_delay": 2,
         }
         self.config["ocr_retry_count"] = self._safe_int(self.ocr_retry_var.get(), 3)
+        self.config["strict_template_threshold"] = self._safe_float(
+            self.strict_threshold_var.get(), 0.9
+        )
 
         self.config["hotkeys"] = {"enabled": self.hotkeys_enabled_var.get()}
         self.config["log_file"] = {
@@ -922,6 +936,7 @@ class MainWindow:
         step_retry = self.config.get("step_retry", {})
         self.step_retry_var.set(str(step_retry.get("max_retries", 3)))
         self.ocr_retry_var.set(str(self.config.get("ocr_retry_count", 3)))
+        self.strict_threshold_var.set(str(self.config.get("strict_template_threshold", 0.9)))
 
         # Hotkeys
         self.hotkeys_enabled_var.set(self.config.get("hotkeys", {}).get("enabled", True))
@@ -971,6 +986,77 @@ class MainWindow:
             save_config(self.config)
 
         ScarecrowEditor(self.root, self.config, images_dir="images", on_save=on_save)
+
+    def _open_image_threshold_editor(self):
+        """Open editor for per-image template match thresholds."""
+        win = tk.Toplevel(self.root)
+        win.title("Image Match Thresholds")
+        win.geometry("420x600")
+        win.transient(self.root)
+        win.grab_set()
+
+        ttk.Label(
+            win,
+            text="Set threshold per image key (0.10 ~ 0.99). Empty = default.",
+            foreground="gray",
+            wraplength=390,
+        ).pack(anchor=tk.W, padx=10, pady=(10, 5))
+
+        canvas = tk.Canvas(win)
+        scrollbar = ttk.Scrollbar(win, orient="vertical", command=canvas.yview)
+        body = ttk.Frame(canvas)
+        body.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=body, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(10, 0), pady=5)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 10), pady=5)
+
+        image_keys = sorted(self.config.get("images", {}).keys())
+        threshold_cfg = self.config.setdefault("image_thresholds", {})
+        vars_map = {}
+        for key in image_keys:
+            row = ttk.Frame(body)
+            row.pack(fill=tk.X, pady=2)
+            ttk.Label(row, text=key, width=20).pack(side=tk.LEFT, padx=(0, 6))
+            cur = threshold_cfg.get(key)
+            var = tk.StringVar(value="" if cur is None else str(cur))
+            vars_map[key] = var
+            ttk.Entry(row, textvariable=var, width=10).pack(side=tk.LEFT)
+
+        def on_save():
+            new_cfg = {}
+            errors = []
+            for key, var in vars_map.items():
+                raw = var.get().strip()
+                if not raw:
+                    continue
+                try:
+                    val = float(raw)
+                except ValueError:
+                    errors.append(f"{key}: not a number")
+                    continue
+                if not (0.10 <= val <= 0.99):
+                    errors.append(f"{key}: must be 0.10~0.99")
+                    continue
+                new_cfg[key] = round(val, 3)
+
+            if errors:
+                messagebox.showerror(
+                    "Invalid threshold",
+                    "Please fix these fields:\n- " + "\n- ".join(errors[:12]),
+                    parent=win,
+                )
+                return
+
+            self.config["image_thresholds"] = new_cfg
+            save_config(self.config)
+            self.status_var.set(f"Saved image thresholds ({len(new_cfg)} keys)")
+            win.destroy()
+
+        btns = ttk.Frame(win)
+        btns.pack(fill=tk.X, padx=10, pady=8)
+        ttk.Button(btns, text="Save", command=on_save).pack(side=tk.LEFT)
+        ttk.Button(btns, text="Cancel", command=win.destroy).pack(side=tk.LEFT, padx=8)
 
     def _test_telegram(self):
         token = self.tg_token_var.get()

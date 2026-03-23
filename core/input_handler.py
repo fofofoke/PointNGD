@@ -362,7 +362,10 @@ class SoftwareInput(InputHandler):
 
     def __init__(self, korean_method="clipboard"):
         super().__init__(korean_method)
-        import pyautogui
+        try:
+            import pyautogui
+        except Exception as e:
+            raise ImportError(f"pyautogui unavailable: {e}") from e
         self.pyautogui = pyautogui
         pyautogui.FAILSAFE = True
         pyautogui.PAUSE = 0.05

@@ -724,7 +724,14 @@ class ROIEditor(tk.Toplevel):
 
         cropped = img.crop((roi["x"], roi["y"], roi["x"] + roi["w"], roi["y"] + roi["h"]))
         bgr = cv2.cvtColor(np.array(cropped), cv2.COLOR_RGB2BGR)
-        found, rel_x, rel_y, conf = self.recognizer.find_template(bgr, template_path)
+        threshold = self.config.get("image_thresholds", {}).get(image_key)
+        try:
+            threshold = float(threshold) if threshold is not None else None
+        except (TypeError, ValueError):
+            threshold = None
+        found, rel_x, rel_y, conf = self.recognizer.find_template(
+            bgr, template_path, threshold=threshold
+        )
         if found:
             messagebox.showinfo(
                 "Matching Test",

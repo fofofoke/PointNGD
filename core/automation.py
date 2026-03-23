@@ -274,6 +274,7 @@ class AutomationEngine:
         self._focus_and_validate(x, y, skip_focus)
         if self.input.handles_positioning:
             self.input.click(x, y)
+            self._verify_hid_cursor(x, y)
         else:
             self._ensure_cursor_pos(x, y)
             self.input.click_in_place()
@@ -284,10 +285,36 @@ class AutomationEngine:
         self._focus_and_validate(x, y, skip_focus)
         if self.input.handles_positioning:
             self.input.double_click(x, y)
+            self._verify_hid_cursor(x, y)
         else:
             self._ensure_cursor_pos(x, y)
             self.input.click_in_place(count=2)
         logger.debug("Automation double-click at (%d, %d)", x, y)
+
+    def _verify_hid_cursor(self, intended_x, intended_y):
+        """Log actual cursor position after HID click for diagnostics.
+
+        HID AbsoluteMouse can land at the wrong position when:
+        - DPI scaling causes coordinate space mismatch
+        - Multi-monitor HID mapping doesn't match virtual desktop size
+        """
+        time.sleep(0.03)
+        actual = self._get_actual_cursor_pos()
+        if actual:
+            ax, ay = actual
+            dx, dy = ax - intended_x, ay - intended_y
+            if abs(dx) > 10 or abs(dy) > 10:
+                self._log(
+                    f"HID CURSOR MISMATCH: intended ({intended_x},{intended_y}) "
+                    f"actual ({ax},{ay}) delta=({dx:+d},{dy:+d}). "
+                    f"Arduino coordinates are landing wrong!",
+                    "warning",
+                )
+            else:
+                logger.debug(
+                    "HID cursor OK: intended (%d,%d) actual (%d,%d)",
+                    intended_x, intended_y, ax, ay,
+                )
 
     def _get_actual_cursor_pos(self):
         """Return (x, y) of the current cursor using native OS API."""
@@ -357,6 +384,11 @@ class AutomationEngine:
                 dy = actual_y - y
 
                 if abs(dx) <= 5 and abs(dy) <= 5:
+                    if attempt > 0:
+                        self._log(
+                            f"Cursor position corrected (attempt {attempt + 1}): "
+                            f"intended ({x},{y}) actual ({actual_x},{actual_y})"
+                        )
                     logger.debug(
                         "Cursor position OK (attempt %d): intended (%d,%d) "
                         "actual (%d,%d)",
@@ -762,10 +794,14 @@ class AutomationEngine:
         found, x, y, conf = self._wait_and_find(image_key, region_key, timeout=timeout)
         if found:
             action = "double-click" if double else "click"
+            raw_roi = self.config["roi"].get(region_key)
+            abs_region = self._abs_roi(raw_roi)
             self._log(
                 f"Found '{image_key}' -> {action} at ({x}, {y}) "
                 f"conf={conf:.3f} "
-                f"[win_offset=({self._win_offset_x}, {self._win_offset_y})]"
+                f"[win_offset=({self._win_offset_x}, {self._win_offset_y}) "
+                f"dpi_ratio={self._roi_dpi_ratio:.3f} "
+                f"raw_roi={raw_roi} abs_roi={abs_region}]"
             )
             if double:
                 self._double_click(x, y)

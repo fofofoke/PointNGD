@@ -504,9 +504,30 @@ class ArduinoInput(InputHandler):
         import serial
         self.serial = serial.Serial(port, baudrate, timeout=2)
         time.sleep(2)  # Wait for Arduino reset
+        self._drain_serial()  # Discard READY message from Arduino boot
         logger.info(f"Arduino connected on {port}")
         # Send screen resolution so Arduino can map absolute coordinates
         self._send_screen_info()
+        self._calibrate_hid()
+
+    def _drain_serial(self):
+        """Discard any pending data in serial buffer (e.g. READY message).
+
+        After Arduino reset, the firmware sends 'READY\\n'.  If this is
+        not consumed before the first real command, readline() in _send
+        will return 'READY' instead of the actual command response,
+        causing a permanent 1-response offset.
+        """
+        old_timeout = self.serial.timeout
+        self.serial.timeout = 0.1
+        try:
+            while True:
+                line = self.serial.readline().decode("utf-8").strip()
+                if not line:
+                    break
+                logger.debug(f"Arduino drain: {line}")
+        finally:
+            self.serial.timeout = old_timeout
 
     def _send(self, command):
         """Send command to Arduino and wait for ACK."""
@@ -544,6 +565,104 @@ class ArduinoInput(InputHandler):
             )
         except Exception as e:
             logger.warning(f"Failed to send screen info: {e}, using defaults")
+
+    def _calibrate_hid(self):
+        """Auto-calibrate HID absolute mouse coordinate mapping.
+
+        Windows may map HID absolute coordinates (0-32767) to a
+        different coordinate space than what GetSystemMetrics reports,
+        especially on high-DPI or multi-monitor setups.
+
+        This method moves the cursor to two known positions via Arduino
+        MOVE, reads back actual cursor positions via GetCursorPos, and
+        re-sends corrected SCREEN dimensions so future clicks land at
+        the intended pixel.
+        """
+        if platform.system() != "Windows":
+            return
+
+        try:
+            import ctypes
+            import ctypes.wintypes
+
+            user32 = ctypes.windll.user32
+
+            # Current SCREEN values sent to Arduino
+            origin_x = user32.GetSystemMetrics(76)   # SM_XVIRTUALSCREEN
+            origin_y = user32.GetSystemMetrics(77)   # SM_YVIRTUALSCREEN
+            width = user32.GetSystemMetrics(78)       # SM_CXVIRTUALSCREEN
+            height = user32.GetSystemMetrics(79)      # SM_CYVIRTUALSCREEN
+
+            if width <= 0 or height <= 0:
+                return
+
+            # Two test points at 1/3 and 2/3 of the virtual desktop
+            t1x = origin_x + width // 3
+            t1y = origin_y + height // 3
+            t2x = origin_x + 2 * width // 3
+            t2y = origin_y + 2 * height // 3
+
+            # Save current cursor position to restore later
+            pt = ctypes.wintypes.POINT()
+            user32.GetCursorPos(ctypes.byref(pt))
+            saved_x, saved_y = pt.x, pt.y
+
+            # Move to first test point and measure
+            self._send(f"MOVE {t1x} {t1y}")
+            time.sleep(0.1)
+            user32.GetCursorPos(ctypes.byref(pt))
+            a1x, a1y = pt.x, pt.y
+
+            # Move to second test point and measure
+            self._send(f"MOVE {t2x} {t2y}")
+            time.sleep(0.1)
+            user32.GetCursorPos(ctypes.byref(pt))
+            a2x, a2y = pt.x, pt.y
+
+            # Restore cursor position
+            user32.SetCursorPos(saved_x, saved_y)
+
+            dx_target = t2x - t1x   # == width // 3
+            dy_target = t2y - t1y   # == height // 3
+            dx_actual = a2x - a1x
+            dy_actual = a2y - a1y
+
+            if dx_target == 0 or dy_target == 0:
+                logger.warning("HID calibration: zero range, skipping")
+                return
+
+            scale_x = dx_actual / dx_target
+            scale_y = dy_actual / dy_target
+
+            # If the mapping is already accurate, no correction needed
+            if abs(scale_x - 1.0) < 0.02 and abs(scale_y - 1.0) < 0.02:
+                logger.info(
+                    "HID calibration: no correction needed "
+                    f"(scale_x={scale_x:.3f} scale_y={scale_y:.3f})"
+                )
+                return
+
+            # Compute the real coordinate space Windows uses for HID mapping
+            # actual = (target - originX) * realWidth / width + realOriginX
+            real_width = round(width * scale_x)
+            real_height = round(height * scale_y)
+            real_origin_x = round(a1x - (t1x - origin_x) * scale_x)
+            real_origin_y = round(a1y - (t1y - origin_y) * scale_y)
+
+            # Re-send corrected SCREEN dimensions
+            self._send(
+                f"SCREEN {real_origin_x} {real_origin_y} "
+                f"{real_width} {real_height}"
+            )
+            logger.info(
+                f"HID calibrated: original=({origin_x},{origin_y} "
+                f"{width}x{height}) -> corrected=({real_origin_x},"
+                f"{real_origin_y} {real_width}x{real_height}) "
+                f"scale=({scale_x:.3f},{scale_y:.3f})"
+            )
+
+        except Exception as e:
+            logger.warning(f"HID calibration failed: {e}")
 
     def click(self, x, y):
         self._send(f"CLICK {x} {y}")

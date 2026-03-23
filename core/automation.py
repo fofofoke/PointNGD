@@ -124,6 +124,8 @@ class AutomationEngine:
         self._win_offset_x = 0
         self._win_offset_y = 0
         self._target_window_id = None
+        # DPI ratio for scaling ROI/click coordinates (runtime / capture)
+        self._roi_dpi_ratio = 1.0
 
         # Error screenshot directory
         self._error_ss_dir = config.get("error_screenshot_dir", "error_screenshots")
@@ -165,6 +167,42 @@ class AutomationEngine:
                 break
             time.sleep(min(0.1, remaining))
 
+    def _configure_dpi_scaling(self):
+        """Detect DPI mismatch between capture-time and runtime.
+
+        If the user changed their display scaling since templates were
+        captured, this configures the image recogniser to auto-resize
+        templates so they still match.
+        """
+        from gui.window_utils import get_dpi_scale
+
+        capture_scales = self.config.get("capture_dpi_scale", {})
+        if not capture_scales:
+            return  # No saved DPI info — templates were captured before this feature
+
+        # Use the ROI scale or the first template scale as representative
+        capture_scale = capture_scales.get("roi")
+        if capture_scale is None:
+            for v in capture_scales.values():
+                if isinstance(v, (int, float)) and v > 0:
+                    capture_scale = v
+                    break
+        if not capture_scale:
+            return
+
+        runtime_scale = get_dpi_scale(self._target_window_id)
+        self.recognizer.set_template_dpi_ratio(capture_scale, runtime_scale)
+        self._roi_dpi_ratio = runtime_scale / capture_scale
+
+        if abs(runtime_scale - capture_scale) > 0.01:
+            self._log(
+                f"DPI changed: captured at {capture_scale:.0%}, "
+                f"current {runtime_scale:.0%}. "
+                f"Templates will be auto-resized. "
+                f"For best accuracy, recapture in ROI Editor.",
+                "warning",
+            )
+
     def _refresh_window(self):
         """Refresh target window position. Returns True if OK."""
         title = self.config.get("target_window_title", "")
@@ -192,23 +230,29 @@ class AutomationEngine:
         return True
 
     def _abs_roi(self, roi):
-        """Convert window-relative ROI dict to absolute screen ROI."""
+        """Convert window-relative ROI dict to absolute screen ROI.
+
+        When the DPI scale has changed since capture, coordinates are
+        rescaled so they point to the same logical area on screen.
+        """
         if not roi:
             return roi
+        r = self._roi_dpi_ratio
         return {
-            "x": roi["x"] + self._win_offset_x,
-            "y": roi["y"] + self._win_offset_y,
-            "w": roi["w"],
-            "h": roi["h"],
+            "x": round(roi["x"] * r) + self._win_offset_x,
+            "y": round(roi["y"] * r) + self._win_offset_y,
+            "w": round(roi["w"] * r),
+            "h": round(roi["h"] * r),
         }
 
     def _abs_pos(self, pos):
         """Convert window-relative position dict to absolute screen position."""
         if not pos:
             return pos
+        r = self._roi_dpi_ratio
         return {
-            "x": pos["x"] + self._win_offset_x,
-            "y": pos["y"] + self._win_offset_y,
+            "x": round(pos["x"] * r) + self._win_offset_x,
+            "y": round(pos["y"] * r) + self._win_offset_y,
         }
 
     # ------------------------------------------------------------------
@@ -273,9 +317,33 @@ class AutomationEngine:
         This mirrors the offset so the next SetCursorPos lands correctly.
 
         Up to 3 attempts are made (initial + 2 corrections).
+
+        On Linux, if a target window is known, we use window-relative
+        movement (``xdotool mousemove --window``) which is immune to
+        coordinate-space mismatches between ``xdotool getwindowgeometry``
+        and the actual display (DPI scaling, Xwayland offsets, etc.).
         """
         from core.input_handler import _set_cursor_pos
 
+        # -- Linux window-relative path ------------------------------------
+        if sys.platform == "linux" and self._target_window_id:
+            win_rel_x = int(x - self._win_offset_x)
+            win_rel_y = int(y - self._win_offset_y)
+            _set_cursor_pos(
+                win_rel_x, win_rel_y,
+                window_id=self._target_window_id,
+            )
+            time.sleep(0.02)
+            logger.debug(
+                "Window-relative move: abs(%d,%d) -> win_rel(%d,%d) "
+                "[window=%s offset=(%d,%d)]",
+                x, y, win_rel_x, win_rel_y,
+                self._target_window_id,
+                self._win_offset_x, self._win_offset_y,
+            )
+            return
+
+        # -- Absolute path (Windows / no target window) --------------------
         max_attempts = 3
         target_x, target_y = int(x), int(y)
 
@@ -349,14 +417,14 @@ class AutomationEngine:
 
     def _wait_and_find(self, image_key, region_key, timeout=10, interval=0.5):
         """Wait for a template image to appear in a region.
-        Returns (found, abs_x, abs_y).
+        Returns (found, abs_x, abs_y, confidence).
         """
         template_path = self.config["images"].get(image_key, "")
         raw_roi = self.config["roi"].get(region_key)
         region = self._abs_roi(raw_roi)
         if not template_path:
             self._log(f"Warning: No image set for '{image_key}'", "warning")
-            return False, 0, 0
+            return False, 0, 0, 0.0
 
         logger.info(
             "wait_and_find: key='%s' template='%s' "
@@ -375,9 +443,9 @@ class AutomationEngine:
                 template_path, region
             )
             if found:
-                return True, ax, ay
+                return True, ax, ay, conf
             time.sleep(interval)
-        return False, 0, 0
+        return False, 0, 0, 0.0
 
     def _ocr_number_retry(self, region, retries=None):
         """OCR a number with retries for reliability.
@@ -476,6 +544,8 @@ class AutomationEngine:
             if not self._refresh_window():
                 self._log("Cannot find target window. Check 'Target Window' setting.", "error")
                 return
+            # Configure template DPI scaling for runtime
+            self._configure_dpi_scaling()
             # Log full coordinate diagnostic on startup
             rect = get_window_rect(self._target_window_id) if self._target_window_id else None
             self._log(
@@ -536,15 +606,18 @@ class AutomationEngine:
         """Run one complete character creation + testing cycle.
         Returns: 'success', 'delete_and_retry', or 'error'.
         """
-        # Step 1: Double-click empty slot
+        # Step 1: Double-click empty slot and verify character creation screen
         self.current_step = 1
         self._log("Step 1: Finding empty slot...")
         result = self._run_step_with_retry(
-            lambda: self._step_find_and_click("empty_slot", "empty_slot", double=True, timeout=15),
+            lambda: self._step_find_and_click(
+                "empty_slot", "empty_slot", double=True, timeout=15,
+                verify_image_key="knight_icon", verify_region_key="knight_icon",
+                verify_timeout=3,
+            ),
             "find_empty_slot")
         if result is None:
             return "error"
-        self._sleep(1)
 
         # Step 2: Click knight icon
         self.current_step = 2
@@ -661,21 +734,39 @@ class AutomationEngine:
         result = self._scarecrow_loop()
         return result
 
-    def _step_find_and_click(self, image_key, region_key, double=False, timeout=10):
+    def _step_find_and_click(self, image_key, region_key, double=False, timeout=10,
+                             verify_image_key=None, verify_region_key=None,
+                             verify_timeout=3):
         """Helper for step retry: find template and click.
-        Returns (True, x, y) or (False, 0, 0).
+        If verify_image_key is given, checks that the verify template appears
+        after clicking.  Returns (True, x, y) or (False, 0, 0).
         """
-        found, x, y = self._wait_and_find(image_key, region_key, timeout=timeout)
+        found, x, y, conf = self._wait_and_find(image_key, region_key, timeout=timeout)
         if found:
             action = "double-click" if double else "click"
             self._log(
                 f"Found '{image_key}' -> {action} at ({x}, {y}) "
+                f"conf={conf:.3f} "
                 f"[win_offset=({self._win_offset_x}, {self._win_offset_y})]"
             )
             if double:
                 self._double_click(x, y)
             else:
                 self._click(x, y)
+            # Post-click verification
+            if verify_image_key and verify_region_key:
+                self._sleep(1)
+                v_found, _, _, _ = self._wait_and_find(
+                    verify_image_key, verify_region_key, timeout=verify_timeout
+                )
+                if not v_found:
+                    self._log(
+                        f"Post-click verification failed: '{verify_image_key}' "
+                        f"not found after clicking '{image_key}'",
+                        "warning",
+                    )
+                    return (False, 0, 0)
+                self._log(f"Post-click verification OK: '{verify_image_key}' found")
             return (True, x, y)
         return (False, 0, 0)
 
@@ -753,7 +844,7 @@ class AutomationEngine:
         self._sleep(1)
 
         # Step 3: Double-click item (same as step 7)
-        found, ix, iy = self._wait_and_find("item_icon", "item_slot", timeout=10)
+        found, ix, iy, _ = self._wait_and_find("item_icon", "item_slot", timeout=10)
         if found:
             self._double_click(ix, iy)
             self._sleep(1)
@@ -762,7 +853,7 @@ class AutomationEngine:
             self._log("Item not found during death recovery!", "warning")
 
         # Step 4: Click popup text (same as step 8)
-        found, px, py = self._wait_and_find("popup_text", "popup_text", timeout=10)
+        found, px, py, _ = self._wait_and_find("popup_text", "popup_text", timeout=10)
         if found:
             self._click(px, py)
             self._sleep(1)
@@ -1080,7 +1171,7 @@ class AutomationEngine:
         # Click exit confirm
         self._refresh_window()
         exit_pos = self._abs_pos(self.config["click_positions"]["exit_confirm_click"])
-        found, x, y = self._wait_and_find("exit_button", "exit_button", timeout=5)
+        found, x, y, _ = self._wait_and_find("exit_button", "exit_button", timeout=5)
         if found:
             self._click(x, y)
         else:

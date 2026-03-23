@@ -66,10 +66,83 @@ class ImageRecognition:
 
     def __init__(self):
         self.match_threshold = 0.8
+        # DPI scale ratio: runtime_dpi / capture_dpi.
+        # When > 1 templates are upscaled; when < 1 they are downscaled.
+        # Set by AutomationEngine at start based on config["capture_dpi_scale"].
+        self._template_dpi_ratio = 1.0
+        self._resized_cache: dict[str, "np.ndarray"] = {}
+
+    def set_template_dpi_ratio(self, capture_scale: float, runtime_scale: float):
+        """Configure the DPI ratio used to auto-resize templates.
+
+        Args:
+            capture_scale: DPI scale when templates were captured (e.g. 1.5).
+            runtime_scale: Current DPI scale (e.g. 1.0).
+        """
+        if capture_scale > 0 and runtime_scale > 0:
+            self._template_dpi_ratio = runtime_scale / capture_scale
+        else:
+            self._template_dpi_ratio = 1.0
+        self._resized_cache.clear()
+        if abs(self._template_dpi_ratio - 1.0) > 0.01:
+            logger.info(
+                "Template DPI ratio set to %.3f (capture=%.2f, runtime=%.2f)",
+                self._template_dpi_ratio, capture_scale, runtime_scale,
+            )
+
+    def _load_template(self, template_path):
+        """Load a template image, applying DPI resize if needed.
+
+        Results are cached so the resize only happens once per path.
+        """
+        if template_path in self._resized_cache:
+            return self._resized_cache[template_path]
+
+        template = cv2.imread(template_path, cv2.IMREAD_COLOR)
+        if template is None:
+            return None
+
+        ratio = self._template_dpi_ratio
+        if abs(ratio - 1.0) > 0.01:
+            h, w = template.shape[:2]
+            new_w = max(1, round(w * ratio))
+            new_h = max(1, round(h * ratio))
+            template = cv2.resize(template, (new_w, new_h),
+                                  interpolation=cv2.INTER_LANCZOS4)
+            logger.debug(
+                "Template resized for DPI: %s (%dx%d -> %dx%d, ratio=%.3f)",
+                template_path, w, h, new_w, new_h, ratio,
+            )
+
+        self._resized_cache[template_path] = template
+        return template
 
     def close(self):
         """Release any held resources."""
-        pass
+        self._resized_cache.clear()
+
+    @staticmethod
+    def _dpi_scale(region, capture_shape):
+        """Return (scale_x, scale_y) to convert capture-pixel coords to
+        logical (region) coords.  Returns (1, 1) when no scaling is needed.
+
+        On high-DPI / scaled displays, ``mss`` may return a capture whose
+        pixel dimensions differ from the *logical* width/height requested
+        via the region dict.  All coordinate math in the pipeline uses the
+        logical space, so template-match results (which are in capture-pixel
+        space) must be scaled back.
+        """
+        cap_h, cap_w = capture_shape[:2]
+        if cap_w == region["w"] and cap_h == region["h"]:
+            return 1.0, 1.0
+        sx = region["w"] / cap_w
+        sy = region["h"] / cap_h
+        logger.warning(
+            "DPI scale detected: capture (%dx%d) != region (%dx%d). "
+            "Scale factors: (%.4f, %.4f)",
+            cap_w, cap_h, region["w"], region["h"], sx, sy,
+        )
+        return sx, sy
 
     def capture_screen(self, region=None):
         """Capture screen or a specific region.
@@ -111,7 +184,7 @@ class ImageRecognition:
             return False, 0, 0, 0
 
         threshold = threshold or self.match_threshold
-        template = cv2.imread(template_path, cv2.IMREAD_COLOR)
+        template = self._load_template(template_path)
         if template is None:
             return False, 0, 0, 0
 
@@ -133,6 +206,9 @@ class ImageRecognition:
         screen = self.capture_screen(region)
         found, rel_x, rel_y, conf = self.find_template(screen, template_path, threshold)
         if found:
+            sx, sy = self._dpi_scale(region, screen.shape)
+            rel_x = round(rel_x * sx)
+            rel_y = round(rel_y * sy)
             abs_x = region["x"] + rel_x
             abs_y = region["y"] + rel_y
             logger.debug(
@@ -153,7 +229,7 @@ class ImageRecognition:
             return []
 
         threshold = threshold or self.match_threshold
-        template = cv2.imread(template_path, cv2.IMREAD_COLOR)
+        template = self._load_template(template_path)
         if template is None:
             return []
 
@@ -235,14 +311,18 @@ class ImageRecognition:
             return False, 0, 0, 0, -1
 
         screen = image if image is not None else self.capture_screen(region)
+        sx, sy = self._dpi_scale(region, screen.shape)
 
-        # Origin in region-local coordinates
+        # Origin in region-local coordinates (logical)
         if origin:
             ox = origin["x"] - region["x"]
             oy = origin["y"] - region["y"]
         else:
             ox = region["w"] // 2
             oy = region["h"] // 2
+        # Convert origin to capture-pixel space for distance calculations
+        ox_cap = round(ox / sx) if sx != 1 else ox
+        oy_cap = round(oy / sy) if sy != 1 else oy
 
         # Phase 1: HSV color filtering to create candidate mask
         hsv_mask = None
@@ -257,7 +337,7 @@ class ImageRecognition:
         for idx, tmpl_path in enumerate(templates):
             if not tmpl_path or not os.path.exists(tmpl_path):
                 continue
-            template = cv2.imread(tmpl_path, cv2.IMREAD_COLOR)
+            template = self._load_template(tmpl_path)
             if template is None:
                 continue
 
@@ -288,20 +368,20 @@ class ImageRecognition:
                 filtered.append(m)
 
         if filtered:
-            # Sort by distance from origin (closest first)
-            filtered.sort(key=lambda m: (m[0] - ox) ** 2 + (m[1] - oy) ** 2)
+            # Sort by distance from origin (closest first) — in capture-pixel space
+            filtered.sort(key=lambda m: (m[0] - ox_cap) ** 2 + (m[1] - oy_cap) ** 2)
 
             best = filtered[0]
-            abs_x = region["x"] + best[0]
-            abs_y = region["y"] + best[1]
+            abs_x = region["x"] + round(best[0] * sx)
+            abs_y = region["y"] + round(best[1] * sy)
             return True, abs_x, abs_y, best[2], best[3]
 
         # Phase 3: Fallback - if templates fail, use HSV centroids sorted by distance
         if hsv_mask is not None:
-            found, cx, cy = self._find_hsv_closest(hsv_mask, ox, oy, min_area=100)
+            found, cx, cy = self._find_hsv_closest(hsv_mask, ox_cap, oy_cap, min_area=100)
             if found:
-                abs_x = region["x"] + cx
-                abs_y = region["y"] + cy
+                abs_x = region["x"] + round(cx * sx)
+                abs_y = region["y"] + round(cy * sy)
                 return True, abs_x, abs_y, 0.5, -1
 
         best_conf = max((m[2] for m in all_matches), default=0.0)

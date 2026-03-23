@@ -136,6 +136,44 @@ def capture_window_by_title(title_substring):
     return img, rect, wid
 
 
+def get_dpi_scale(window_id=None):
+    """Return the DPI scale factor for the given window (or primary monitor).
+
+    On Windows, queries the effective DPI for the monitor that the window
+    is on (Per-Monitor DPI) and divides by the baseline 96 DPI.
+    Returns a float, e.g. 1.0 for 100%, 1.5 for 150%, 2.0 for 200%.
+
+    On Linux / when detection fails, returns 1.0.
+    """
+    if sys.platform != "win32":
+        return 1.0
+    try:
+        import ctypes
+        # MonitorFromWindow → MONITOR_DEFAULTTONEAREST = 2
+        user32 = ctypes.windll.user32
+        shcore = ctypes.windll.shcore
+        hwnd = int(window_id) if window_id else 0
+        monitor = user32.MonitorFromWindow(hwnd, 2)
+        dpi_x = ctypes.c_uint()
+        dpi_y = ctypes.c_uint()
+        # MDT_EFFECTIVE_DPI = 0
+        hr = shcore.GetDpiForMonitor(monitor, 0,
+                                     ctypes.byref(dpi_x), ctypes.byref(dpi_y))
+        if hr == 0:
+            return dpi_x.value / 96.0
+    except Exception:
+        pass
+    # Fallback: try GetDpiForWindow (Windows 10 1607+)
+    try:
+        import ctypes
+        dpi = ctypes.windll.user32.GetDpiForWindow(int(window_id or 0))
+        if dpi > 0:
+            return dpi / 96.0
+    except Exception:
+        pass
+    return 1.0
+
+
 # ---------------------------------------------------------------------------
 # Windows implementation
 # ---------------------------------------------------------------------------
@@ -182,15 +220,23 @@ def _get_rect_win32(hwnd):
     if not user32.GetClientRect(int(hwnd), ctypes.byref(client_rect)):
         return None
 
-    # Convert client area (0,0) to screen coordinates
-    pt = POINT(0, 0)
-    user32.ClientToScreen(int(hwnd), ctypes.byref(pt))
+    # Convert BOTH corners of the client area to screen (physical) coords.
+    # GetClientRect returns logical pixels in the *target window's* DPI
+    # context, but ClientToScreen translates to physical screen pixels.
+    # When the target is a DPI-unaware window on a scaled display (e.g.
+    # 150 %), the logical size (800x600) differs from the physical size
+    # (1200x900).  Converting both corners gives us the true physical
+    # dimensions that match what mss.grab() captures.
+    pt_tl = POINT(0, 0)
+    pt_br = POINT(client_rect.right, client_rect.bottom)
+    user32.ClientToScreen(int(hwnd), ctypes.byref(pt_tl))
+    user32.ClientToScreen(int(hwnd), ctypes.byref(pt_br))
 
     return {
-        "x": pt.x,
-        "y": pt.y,
-        "w": client_rect.right,
-        "h": client_rect.bottom,
+        "x": pt_tl.x,
+        "y": pt_tl.y,
+        "w": pt_br.x - pt_tl.x,
+        "h": pt_br.y - pt_tl.y,
     }
 
 
@@ -200,6 +246,14 @@ def _capture_window_win32_direct(hwnd):
     PrintWindow asks the window to paint itself into a memory DC, so it
     captures the correct content even when another window is on top.
 
+    On high-DPI displays the target window may be DPI-unaware, meaning
+    its client area (``GetClientRect``) is in logical pixels while the
+    physical area it occupies on screen is larger.  We capture at the
+    logical size (which is what ``PrintWindow`` produces) and then resize
+    to the physical size so that the image matches what ``mss.grab()``
+    would return.  This keeps templates captured in the ROI editor at the
+    same scale as the runtime ``mss`` screen captures.
+
     Returns (PIL.Image, rect_dict) or (None, None).
     """
     import ctypes
@@ -208,19 +262,34 @@ def _capture_window_win32_direct(hwnd):
     if not rect or rect["w"] <= 0 or rect["h"] <= 0:
         return None, None
 
-    w, h = rect["w"], rect["h"]
+    phys_w, phys_h = rect["w"], rect["h"]
     hwnd_int = int(hwnd)
 
+    # Logical (window-internal) client size — may differ from physical
+    # size when the target is DPI-unaware on a scaled display.
+    class RECT_S(ctypes.Structure):
+        _fields_ = [
+            ("left", ctypes.c_long), ("top", ctypes.c_long),
+            ("right", ctypes.c_long), ("bottom", ctypes.c_long),
+        ]
     user32 = ctypes.windll.user32
     gdi32 = ctypes.windll.gdi32
 
-    # Create compatible DC and bitmap
+    client_rect = RECT_S()
+    user32.GetClientRect(hwnd_int, ctypes.byref(client_rect))
+    log_w = client_rect.right
+    log_h = client_rect.bottom
+    if log_w <= 0 or log_h <= 0:
+        return None, None
+
+    # Create compatible DC and bitmap at the *logical* size — this is
+    # the resolution PrintWindow will actually paint into.
     wnd_dc = user32.GetDC(hwnd_int)
     if not wnd_dc:
         return None, None
 
     mem_dc = gdi32.CreateCompatibleDC(wnd_dc)
-    bitmap = gdi32.CreateCompatibleBitmap(wnd_dc, w, h)
+    bitmap = gdi32.CreateCompatibleBitmap(wnd_dc, log_w, log_h)
     old_bitmap = gdi32.SelectObject(mem_dc, bitmap)
 
     # PrintWindow with PW_CLIENTONLY captures client area content.
@@ -254,14 +323,14 @@ def _capture_window_win32_direct(hwnd):
 
     bmi = BITMAPINFOHEADER()
     bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
-    bmi.biWidth = w
-    bmi.biHeight = -h  # negative = top-down row order
+    bmi.biWidth = log_w
+    bmi.biHeight = -log_h  # negative = top-down row order
     bmi.biPlanes = 1
     bmi.biBitCount = 32
     bmi.biCompression = 0  # BI_RGB
 
-    buf = ctypes.create_string_buffer(w * h * 4)
-    gdi32.GetDIBits(mem_dc, bitmap, 0, h, buf, ctypes.byref(bmi), 0)
+    buf = ctypes.create_string_buffer(log_w * log_h * 4)
+    gdi32.GetDIBits(mem_dc, bitmap, 0, log_h, buf, ctypes.byref(bmi), 0)
 
     # Cleanup GDI resources
     gdi32.SelectObject(mem_dc, old_bitmap)
@@ -272,8 +341,17 @@ def _capture_window_win32_direct(hwnd):
     # Convert BGRA buffer to RGB PIL Image
     if not np or not Image:
         return None, None
-    arr = np.frombuffer(buf, dtype=np.uint8).reshape(h, w, 4)
+    arr = np.frombuffer(buf, dtype=np.uint8).reshape(log_h, log_w, 4)
     img = Image.fromarray(arr[:, :, [2, 1, 0]], "RGB")
+
+    # Resize to physical dimensions so that the image matches
+    # mss screen captures and ROI coordinates align with screen coords.
+    if (log_w, log_h) != (phys_w, phys_h):
+        logger.info(
+            "DPI resize: PrintWindow %dx%d -> physical %dx%d (window %s)",
+            log_w, log_h, phys_w, phys_h, hwnd,
+        )
+        img = img.resize((phys_w, phys_h), Image.LANCZOS)
 
     return img, rect
 

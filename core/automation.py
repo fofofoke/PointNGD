@@ -439,13 +439,28 @@ class AutomationEngine:
             self._wait_pause()
             self._refresh_window()
             region = self._abs_roi(self.config["roi"].get(region_key))
+            threshold = self._get_image_threshold(image_key)
             found, ax, ay, conf = self.recognizer.find_template_in_region(
-                template_path, region
+                template_path, region, threshold=threshold
             )
             if found:
                 return True, ax, ay, conf
             time.sleep(interval)
         return False, 0, 0, 0.0
+
+    def _get_image_threshold(self, image_key, default=None):
+        """Return per-image match threshold from config (0.1~0.99)."""
+        thresholds = self.config.get("image_thresholds", {})
+        raw = thresholds.get(image_key)
+        if raw is None:
+            return default
+        try:
+            val = float(raw)
+            if 0.1 <= val <= 0.99:
+                return val
+        except (TypeError, ValueError):
+            pass
+        return default
 
     def _ocr_number_retry(self, region, retries=None):
         """OCR a number with retries for reliability.
@@ -641,7 +656,10 @@ class AutomationEngine:
             template = self.config["images"].get("knight_verify", "")
             region = self._abs_roi(self.config["roi"]["knight_verify"])
             if template:
-                found, _, _, _ = self.recognizer.find_template_in_region(template, region)
+                found, _, _, _ = self.recognizer.find_template_in_region(
+                    template, region,
+                    threshold=self._get_image_threshold("knight_verify"),
+                )
                 if found:
                     self._log("Knight verified!")
                     break
@@ -789,7 +807,10 @@ class AutomationEngine:
         # Method 1: Check for death screen image
         if death_template:
             screen = self._capture_target_screen()
-            found, _, _, _ = self.recognizer.find_template(screen, death_template)
+            found, _, _, _ = self.recognizer.find_template(
+                screen, death_template,
+                threshold=self._get_image_threshold("death_screen"),
+            )
             if found:
                 death_detected = True
 
@@ -825,14 +846,20 @@ class AutomationEngine:
                     self._refresh_window()
                     rect = get_window_rect(self._target_window_id) if self._target_window_id else None
                     screen = self._capture_target_screen()
-                    found, dx, dy, _ = self.recognizer.find_template(screen, death_template)
+                    found, dx, dy, _ = self.recognizer.find_template(
+                        screen, death_template,
+                        threshold=self._get_image_threshold("death_screen"),
+                    )
                     if found and rect:
                         self._click(dx + rect["x"], dy + rect["y"])
         elif death_template:
             self._refresh_window()
             rect = get_window_rect(self._target_window_id) if self._target_window_id else None
             screen = self._capture_target_screen()
-            found, dx, dy, _ = self.recognizer.find_template(screen, death_template)
+            found, dx, dy, _ = self.recognizer.find_template(
+                screen, death_template,
+                threshold=self._get_image_threshold("death_screen"),
+            )
             if found and rect:
                 self._click(dx + rect["x"], dy + rect["y"])
                 self._log("Clicked death screen image")
@@ -909,7 +936,12 @@ class AutomationEngine:
         Returns 'success' or 'delete_and_retry'.
         """
         current_level = 1
+        level5_detect_streak = 0
+        pending_final_decision = None  # "success" | "delete"
+        pending_decision_streak = 0
         click_delay = self.config.get("scarecrow_click_delay", 0.5)
+        strict_threshold = float(self.config.get("strict_template_threshold", 0.9))
+        strict_threshold = min(0.99, max(0.5, strict_threshold))
 
         # Death recovery settings
         death_cfg = self.config.get("death_recovery", {})
@@ -984,9 +1016,6 @@ class AutomationEngine:
         exp_region_cfg = self.config["roi"].get("exp_display") or self.config.get("exp_display")
         exp_region = self._abs_roi(exp_region_cfg) if exp_region_cfg else None
         last_level, last_exp_img = self._capture_progress_snapshot(level_region, exp_region)
-
-        # MP requirements per level
-        mp_requirements = {2: 3, 3: 5, 4: 7, 5: 9}
 
         while not self._stop_event.is_set():
             self._check_stop()
@@ -1103,60 +1132,122 @@ class AutomationEngine:
                 last_level = cur_level
                 last_exp_img = cur_exp_img
 
-            # Check for level up (OCR-based)
+            # OCR level tracking
             if cur_level is not None and cur_level > current_level:
                 current_level = cur_level
-
                 self._log(f"Level up detected! Current level: {current_level}")
                 self.stats.record_level_up(current_level, self.iteration_count)
 
-                # Check MP (with retry)
-                required_mp = mp_requirements.get(current_level)
-                if required_mp is None:
-                    # Level not in requirements, keep clicking
-                    continue
+            # Fallback: if OCR is unstable, detect level 5 by template in level ROI.
+            if current_level < 5:
+                level5_template = self.config["images"].get("level_5", "")
+                if level5_template and os.path.exists(level5_template):
+                    level5_threshold = self._get_image_threshold("level_5", strict_threshold)
+                    found_l5, _, _, conf_l5 = self.recognizer.find_template_in_region(
+                        level5_template, level_region, threshold=level5_threshold
+                    )
+                    if found_l5:
+                        level5_detect_streak += 1
+                        self._log(
+                            f"Level 5 template matched "
+                            f"(conf={conf_l5:.3f}, streak={level5_detect_streak}/2)",
+                            "debug",
+                        )
+                        if level5_detect_streak >= 2:
+                            current_level = 5
+                            self._log("Level 5 reached (template confirmation x2).")
+                    else:
+                        level5_detect_streak = 0
+                else:
+                    level5_detect_streak = 0
 
+            # MP is tested only when level 5 is confirmed.
+            if current_level < 5:
+                pending_final_decision = None
+                pending_decision_streak = 0
+                continue
+
+            required_mp = 9
+            actual_mp = self._ocr_number_retry(mp_region)
+            final_decision = None
+            low_mp_value = None
+
+            if actual_mp is None:
+                self._log(f"Level {current_level}: MP OCR failed! "
+                          "Retrying after short delay...", "warning")
+                self._sleep(0.5)
                 actual_mp = self._ocr_number_retry(mp_region)
 
-                if actual_mp is None:
-                    self._log(f"Level {current_level}: MP OCR failed! "
-                              "Retrying after short delay...", "warning")
-                    self._sleep(1)
-                    actual_mp = self._ocr_number_retry(mp_region)
-
-                if actual_mp is None:
-                    self._log(f"Level {current_level}: MP still unreadable. "
-                              "Skipping MP check, continuing scarecrow.", "warning")
-                    self._save_error_screenshot(f"mp_ocr_fail_lv{current_level}")
-                    continue
-
-                self._log(f"Level {current_level}: MP = {actual_mp} (need {required_mp})")
-
-                if current_level == 5:
-                    if actual_mp == 9:
-                        self.stats.record_mp_pass(current_level, actual_mp,
-                                                  self.iteration_count)
-                        return "success"
-                    else:
-                        self._log(f"Level 5 but MP={actual_mp}, not 9. Deleting character.")
-                        self.stats.record_mp_fail(current_level, actual_mp, 9,
-                                                  self.iteration_count)
-                        self._exit_and_delete()
-                        return "delete_and_retry"
-
-                if actual_mp != required_mp:
-                    self._log(
-                        f"Level {current_level} MP={actual_mp} != {required_mp}. "
-                        "Deleting character."
+            if actual_mp is not None:
+                self._log(f"Level {current_level}: MP OCR={actual_mp} (need {required_mp})")
+                if actual_mp >= required_mp:
+                    final_decision = "success"
+                else:
+                    final_decision = "delete"
+                    low_mp_value = actual_mp
+            else:
+                # OCR failed twice: match mp_2~mp_8 templates with strict threshold.
+                matched_low = None
+                best_conf = 0.0
+                for mp_val in range(2, 9):
+                    key = f"mp_{mp_val}"
+                    path = self.config["images"].get(key, "")
+                    if not path or not os.path.exists(path):
+                        continue
+                    mp_threshold = self._get_image_threshold(key, strict_threshold)
+                    found_mp, _, _, conf_mp = self.recognizer.find_template_in_region(
+                        path, mp_region, threshold=mp_threshold
                     )
-                    self.stats.record_mp_fail(current_level, actual_mp, required_mp,
-                                              self.iteration_count)
-                    self._exit_and_delete()
-                    return "delete_and_retry"
+                    best_conf = max(best_conf, conf_mp)
+                    if found_mp:
+                        matched_low = mp_val
+                        break
 
-                self.stats.record_mp_pass(current_level, actual_mp, self.iteration_count)
-                self._log(f"Level {current_level} MP={required_mp} OK, continuing...")
-                # Continue scarecrow clicking
+                if matched_low is not None:
+                    final_decision = "delete"
+                    low_mp_value = matched_low
+                    self._log(
+                        f"MP template matched: mp_{matched_low} "
+                        f"(threshold={strict_threshold:.2f}).",
+                        "warning",
+                    )
+                else:
+                    final_decision = "success"
+                    self._log(
+                        f"MP OCR failed twice and no mp_2~mp_8 matched "
+                        f"(best_conf={best_conf:.3f}). Treating as MP>=9.",
+                        "warning",
+                    )
+
+            # Confirm identical decision for 2 consecutive frames.
+            if final_decision == pending_final_decision:
+                pending_decision_streak += 1
+            else:
+                pending_final_decision = final_decision
+                pending_decision_streak = 1
+
+            if pending_decision_streak < 2:
+                self._log(
+                    f"Decision pending: {final_decision} "
+                    f"({pending_decision_streak}/2). Rechecking...",
+                    "debug",
+                )
+                self._sleep(0.3)
+                continue
+
+            if final_decision == "success":
+                pass_mp = actual_mp if actual_mp is not None else 9
+                self.stats.record_mp_pass(current_level, pass_mp, self.iteration_count)
+                return "success"
+
+            fail_mp = low_mp_value if low_mp_value is not None else (actual_mp or 0)
+            self._log(
+                f"Level {current_level} MP={fail_mp} < {required_mp}. Deleting character."
+            )
+            self.stats.record_mp_fail(current_level, fail_mp, required_mp,
+                                      self.iteration_count)
+            self._exit_and_delete()
+            return "delete_and_retry"
 
         return "stopped"
 
@@ -1199,6 +1290,7 @@ class AutomationEngine:
         # Wait for popup to appear
         delete_template = self.config["images"].get("delete_popup", "")
         delete_region = self._abs_roi(self.config["roi"]["delete_popup"])
+        delete_threshold = self._get_image_threshold("delete_popup")
         if delete_template:
             # Wait for popup to appear
             popup_appeared = False
@@ -1206,7 +1298,7 @@ class AutomationEngine:
                 self._check_stop()
                 self._wait_pause()
                 found, _, _, _ = self.recognizer.find_template_in_region(
-                    delete_template, delete_region
+                    delete_template, delete_region, threshold=delete_threshold
                 )
                 if found:
                     popup_appeared = True
@@ -1219,7 +1311,7 @@ class AutomationEngine:
                     self._check_stop()
                     self._wait_pause()
                     found, _, _, _ = self.recognizer.find_template_in_region(
-                        delete_template, delete_region
+                        delete_template, delete_region, threshold=delete_threshold
                     )
                     if not found:
                         self._log("Delete complete!")

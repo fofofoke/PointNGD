@@ -114,7 +114,8 @@ class TestConfig(unittest.TestCase):
         required_images = [
             "empty_slot", "knight_icon", "knight_verify", "confirm_button",
             "item_icon", "popup_text", "scarecrow", "exit_button",
-            "delete_popup",
+            "delete_popup", "death_screen", "revival_button",
+            "level_5", "mp_2", "mp_3", "mp_4", "mp_5", "mp_6", "mp_7", "mp_8",
         ]
         for key in required_images:
             self.assertIn(key, DEFAULT_CONFIG["images"],
@@ -525,6 +526,47 @@ class TestAutomationEngine(unittest.TestCase):
         # Level 1 not in requirements (should keep clicking)
         self.assertNotIn(1, mp_requirements)
 
+    def test_get_image_threshold_returns_configured_value(self):
+        """_get_image_threshold returns per-key threshold from config."""
+        from core.automation import AutomationEngine
+        from core.config import load_config
+        config = load_config("/nonexistent/config.json")
+        config["image_thresholds"] = {"level_5": 0.92, "mp_3": 0.85}
+        engine = AutomationEngine(config)
+        self.assertAlmostEqual(engine._get_image_threshold("level_5"), 0.92)
+        self.assertAlmostEqual(engine._get_image_threshold("mp_3"), 0.85)
+
+    def test_get_image_threshold_returns_default_when_missing(self):
+        """_get_image_threshold returns default for unconfigured keys."""
+        from core.automation import AutomationEngine
+        from core.config import load_config
+        config = load_config("/nonexistent/config.json")
+        config["image_thresholds"] = {}
+        engine = AutomationEngine(config)
+        self.assertIsNone(engine._get_image_threshold("level_5"))
+        self.assertEqual(engine._get_image_threshold("level_5", 0.9), 0.9)
+
+    def test_get_image_threshold_rejects_out_of_range(self):
+        """_get_image_threshold rejects values outside 0.1~0.99."""
+        from core.automation import AutomationEngine
+        from core.config import load_config
+        config = load_config("/nonexistent/config.json")
+        config["image_thresholds"] = {"bad_low": 0.05, "bad_high": 1.0}
+        engine = AutomationEngine(config)
+        self.assertIsNone(engine._get_image_threshold("bad_low"))
+        self.assertIsNone(engine._get_image_threshold("bad_high"))
+
+    def test_config_image_thresholds_default_empty(self):
+        """Default config should have empty image_thresholds dict."""
+        from core.config import DEFAULT_CONFIG
+        self.assertIn("image_thresholds", DEFAULT_CONFIG)
+        self.assertEqual(DEFAULT_CONFIG["image_thresholds"], {})
+
+    def test_config_strict_template_threshold_default(self):
+        """Default strict_template_threshold should be 0.9."""
+        from core.config import DEFAULT_CONFIG
+        self.assertEqual(DEFAULT_CONFIG["strict_template_threshold"], 0.9)
+
     def test_run_step_with_retry_success(self):
         from core.automation import AutomationEngine
         from core.config import load_config
@@ -637,6 +679,29 @@ class TestROIEditorLabels(unittest.TestCase):
                           f"ROI '{roi_key}' maps to image key '{image_key}' "
                           f"which is not in DEFAULT_CONFIG['images']")
 
+    def test_shared_roi_entries_are_capturable(self):
+        """All SHARED_ROI keys must be in CAPTURABLE_ROIS."""
+        from gui.roi_editor import ROIEditor
+        for key in ROIEditor.SHARED_ROI:
+            self.assertIn(key, ROIEditor.CAPTURABLE_ROIS,
+                          f"SHARED_ROI key '{key}' not in CAPTURABLE_ROIS")
+
+    def test_shared_roi_parents_exist_in_config(self):
+        """SHARED_ROI parent keys must exist in DEFAULT_CONFIG['roi']."""
+        from gui.roi_editor import ROIEditor
+        from core.config import DEFAULT_CONFIG
+        for key, parent in ROIEditor.SHARED_ROI.items():
+            self.assertIn(parent, DEFAULT_CONFIG["roi"],
+                          f"SHARED_ROI parent '{parent}' for '{key}' "
+                          f"not in DEFAULT_CONFIG['roi']")
+
+    def test_shared_roi_keys_have_labels(self):
+        """All SHARED_ROI keys must have entries in ROI_LABELS."""
+        from gui.roi_editor import ROIEditor
+        for key in ROIEditor.SHARED_ROI:
+            self.assertIn(key, ROIEditor.ROI_LABELS,
+                          f"SHARED_ROI key '{key}' missing from ROI_LABELS")
+
 
 @unittest.skipUnless(
     __import__("importlib").util.find_spec("tkinter"),
@@ -686,6 +751,8 @@ class TestWorkflowIntegrity(unittest.TestCase):
             "empty_slot", "knight_icon", "knight_verify",
             "confirm_button", "item_icon", "popup_text",
             "scarecrow", "exit_button", "delete_popup",
+            "death_screen", "revival_button",
+            "level_5", "mp_2", "mp_3", "mp_4", "mp_5", "mp_6", "mp_7", "mp_8",
         ]
         for key in required_images:
             self.assertIn(key, DEFAULT_CONFIG["images"],

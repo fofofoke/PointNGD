@@ -1206,9 +1206,12 @@ class AutomationEngine:
                 if matched_low is not None:
                     final_decision = "delete"
                     low_mp_value = matched_low
+                    used_thresh = self._get_image_threshold(
+                        f"mp_{matched_low}", strict_threshold
+                    )
                     self._log(
                         f"MP template matched: mp_{matched_low} "
-                        f"(threshold={strict_threshold:.2f}).",
+                        f"(threshold={used_thresh:.2f}).",
                         "warning",
                     )
                 else:

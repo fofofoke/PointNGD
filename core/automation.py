@@ -543,6 +543,46 @@ class AutomationEngine:
                 time.sleep(0.3)
         return None
 
+    def _classify_mp_from_templates(self, mp_region, strict_threshold):
+        """Classify MP when OCR failed twice using MP templates.
+
+        Returns:
+            (decision, low_mp_value, log_message)
+            - decision: "success" or "delete"
+            - low_mp_value: int or None (used only for delete branch)
+            - log_message: text for warning log
+
+        Rule:
+          * mp_1~mp_8 => delete
+          * no low-template match => success (treated as MP>=9)
+        """
+        # mp_1~mp_8 are considered low MP => delete.
+        best_conf = 0.0
+        for mp_val in range(1, 9):
+            key = f"mp_{mp_val}"
+            path = self.config["images"].get(key, "")
+            if not path or not os.path.exists(path):
+                continue
+            mp_threshold = self._get_image_threshold(key, strict_threshold)
+            found_mp, _, _, conf_mp = self.recognizer.find_template_in_region(
+                path, mp_region, threshold=mp_threshold
+            )
+            best_conf = max(best_conf, conf_mp)
+            if found_mp:
+                used_thresh = self._get_image_threshold(key, strict_threshold)
+                return (
+                    "delete",
+                    mp_val,
+                    f"MP template matched: {key} (threshold={used_thresh:.2f}).",
+                )
+
+        return (
+            "success",
+            None,
+            f"MP OCR failed twice and no mp_1~mp_8 matched "
+            f"(best_conf={best_conf:.3f}). Treating as MP>=9.",
+        )
+
     def _save_error_screenshot(self, step_name):
         """Save a screenshot when an error occurs for debugging."""
         try:
@@ -1282,41 +1322,11 @@ class AutomationEngine:
                     final_decision = "delete"
                     low_mp_value = actual_mp
             else:
-                # OCR failed twice: match mp_1~mp_8 templates with strict threshold.
-                matched_low = None
-                best_conf = 0.0
-                for mp_val in range(1, 9):
-                    key = f"mp_{mp_val}"
-                    path = self.config["images"].get(key, "")
-                    if not path or not os.path.exists(path):
-                        continue
-                    mp_threshold = self._get_image_threshold(key, strict_threshold)
-                    found_mp, _, _, conf_mp = self.recognizer.find_template_in_region(
-                        path, mp_region, threshold=mp_threshold
-                    )
-                    best_conf = max(best_conf, conf_mp)
-                    if found_mp:
-                        matched_low = mp_val
-                        break
-
-                if matched_low is not None:
-                    final_decision = "delete"
-                    low_mp_value = matched_low
-                    used_thresh = self._get_image_threshold(
-                        f"mp_{matched_low}", strict_threshold
-                    )
-                    self._log(
-                        f"MP template matched: mp_{matched_low} "
-                        f"(threshold={used_thresh:.2f}).",
-                        "warning",
-                    )
-                else:
-                    final_decision = "success"
-                    self._log(
-                        f"MP OCR failed twice and no mp_1~mp_8 matched "
-                        f"(best_conf={best_conf:.3f}). Treating as MP>=9.",
-                        "warning",
-                    )
+                # OCR failed twice: use MP template fallback.
+                final_decision, low_mp_value, mp_log = self._classify_mp_from_templates(
+                    mp_region, strict_threshold
+                )
+                self._log(mp_log, "warning")
 
             # Confirm identical decision for 2 consecutive frames.
             if final_decision == pending_final_decision:

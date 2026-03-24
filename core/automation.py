@@ -606,6 +606,15 @@ class AutomationEngine:
         korean_method = self.config.get("korean_input_method", "clipboard")
         self.input = create_input_handler(method, port, baudrate, korean_method)
         self._log(f"Input method: {method}")
+        if method == "arduino":
+            fail_fast = self.config.get("arduino_hid_fail_fast", True)
+            hid_ok = getattr(self.input, "hid_mapping_ok", True)
+            if fail_fast and not hid_ok:
+                raise RuntimeError(
+                    "Arduino HID startup sanity check failed. "
+                    "Stopping early to avoid repeated wrong clicks. "
+                    "Re-upload firmware and check DPI/Windows display settings."
+                )
 
     def _run_loop(self):
         """Main automation loop."""

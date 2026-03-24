@@ -546,6 +546,81 @@ class ArduinoInput(InputHandler):
         # Send screen resolution so Arduino can map absolute coordinates
         self._send_screen_info()
         self._calibrate_hid()
+        self._sanity_check_hid_mapping()
+
+    def _probe_firmware_version(self):
+        """Query firmware version if supported.
+
+        Newer firmware responds to `VERSION` with `VER:x.y.z`.
+        Older firmware may reply `ERR:UNKNOWN` or nothing.
+        """
+        old_timeout = self.serial.timeout
+        self.serial.timeout = 0.4
+        try:
+            self.serial.write(b"VERSION\n")
+            self.serial.flush()
+            line = self.serial.readline().decode("utf-8").strip()
+            if line.startswith("VER:"):
+                self.firmware_version = line.split(":", 1)[1].strip()
+                logger.info("Arduino firmware version: %s", self.firmware_version)
+            else:
+                logger.warning(
+                    "Arduino firmware version probe unavailable (response=%r). "
+                    "If HID clicks are offset, re-upload latest "
+                    "arduino/lineage_hid/lineage_hid.ino.",
+                    line,
+                )
+        except Exception as e:
+            logger.warning("Arduino firmware version probe failed: %s", e)
+        finally:
+            self.serial.timeout = old_timeout
+
+    def _sanity_check_hid_mapping(self):
+        """Best-effort startup check for HID absolute mapping accuracy."""
+        if platform.system() != "Windows":
+            return True
+        try:
+            import ctypes
+            import ctypes.wintypes
+            user32 = ctypes.windll.user32
+            origin_x = user32.GetSystemMetrics(76)   # SM_XVIRTUALSCREEN
+            origin_y = user32.GetSystemMetrics(77)   # SM_YVIRTUALSCREEN
+            width = user32.GetSystemMetrics(78)      # SM_CXVIRTUALSCREEN
+            height = user32.GetSystemMetrics(79)     # SM_CYVIRTUALSCREEN
+            tx = origin_x + width // 2
+            ty = origin_y + height // 2
+
+            pt = ctypes.wintypes.POINT()
+            user32.GetCursorPos(ctypes.byref(pt))
+            saved_x, saved_y = pt.x, pt.y
+
+            self._send(f"MOVE {tx} {ty}")
+            time.sleep(0.1)
+            user32.GetCursorPos(ctypes.byref(pt))
+            ax, ay = pt.x, pt.y
+            user32.SetCursorPos(saved_x, saved_y)
+
+            err_x = abs(ax - tx)
+            err_y = abs(ay - ty)
+            if err_x > 120 or err_y > 120:
+                self.hid_mapping_ok = False
+                logger.warning(
+                    "Startup HID sanity check failed: intended (%d,%d) "
+                    "actual (%d,%d) err=(%d,%d). "
+                    "Arduino absolute mapping may still be inaccurate.",
+                    tx, ty, ax, ay, err_x, err_y,
+                )
+            else:
+                self.hid_mapping_ok = True
+                logger.info(
+                    "Startup HID sanity check OK: err=(%d,%d)",
+                    err_x, err_y,
+                )
+            return self.hid_mapping_ok
+        except Exception as e:
+            self.hid_mapping_ok = False
+            logger.warning("Startup HID sanity check failed: %s", e)
+            return False
 
     def _probe_firmware_version(self):
         """Query firmware version if supported.

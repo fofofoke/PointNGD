@@ -26,10 +26,12 @@
 
 #include <HID-Project.h>
 
+const char* FW_VERSION = "2.1.0";
+
 // Virtual desktop dimensions (updated by SCREEN command from PC)
 long screenOriginX = 0;
 long screenOriginY = 0;
-long screenWidth = 1920;
+long screenWidth = 3840;
 long screenHeight = 1080;
 
 // Current mouse position tracking
@@ -88,6 +90,11 @@ void processCommand(String cmd) {
   else if (cmd.startsWith("SCREEN ")) {
     success = handleScreen(cmd.substring(7));
   }
+  else if (cmd == "VERSION") {
+    Serial.print("VER:");
+    Serial.println(FW_VERSION);
+    return;
+  }
   else {
     Serial.println("ERR:UNKNOWN");
     return;
@@ -112,7 +119,7 @@ bool handleScreen(String params) {
   screenWidth = params.substring(idx2 + 1, idx3).toInt();
   screenHeight = params.substring(idx3 + 1).toInt();
 
-  if (screenWidth <= 0) screenWidth = 1920;
+  if (screenWidth <= 0) screenWidth = 3840;
   if (screenHeight <= 0) screenHeight = 1080;
 
   return true;

@@ -29,6 +29,7 @@ DEFAULT_CONFIG = {
         "delete_popup": {"x": 0, "y": 0, "w": 200, "h": 100},
         "hp_display": {"x": 0, "y": 0, "w": 80, "h": 30},
         "exp_display": {"x": 0, "y": 0, "w": 100, "h": 20},
+        "game_entered": {"x": 0, "y": 0, "w": 200, "h": 200},
     },
     "click_positions": {
         "knight_verify_click": {"x": 0, "y": 0},
@@ -61,6 +62,7 @@ DEFAULT_CONFIG = {
         "delete_popup": "",
         "death_screen": "",
         "revival_button": "",
+        "game_entered": "",
     },
     "strict_template_threshold": 0.9,
     "image_thresholds": {},

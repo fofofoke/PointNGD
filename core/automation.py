@@ -583,6 +583,38 @@ class AutomationEngine:
             f"(best_conf={best_conf:.3f}). Treating as MP>=9.",
         )
 
+    def _classify_hp_from_templates(self, hp_region, strict_threshold):
+        """Classify HP using template matching after MP=9 confirmed.
+
+        Checks if the first digit of HP is 6 (60s) using hp_6 template.
+        Returns:
+            "delete" if HP is 60s (hp_6 matched)
+            "success" if HP is 70s (hp_6 not matched)
+        """
+        hp6_path = self.config["images"].get("hp_6", "")
+        if hp6_path and os.path.exists(hp6_path):
+            hp6_threshold = self._get_image_threshold("hp_6", strict_threshold)
+            found_hp6, _, _, conf_hp6 = self.recognizer.find_template_in_region(
+                hp6_path, hp_region, threshold=hp6_threshold
+            )
+            if found_hp6:
+                self._log(
+                    f"HP first digit is 6 (hp_6 matched, conf={conf_hp6:.3f}). "
+                    f"HP is in 60s — deleting.",
+                    "warning",
+                )
+                return "delete"
+            self._log(
+                f"HP first digit is not 6 (hp_6 best_conf={conf_hp6:.3f}). "
+                f"Treating as 70s — success."
+            )
+        else:
+            self._log(
+                "No hp_6 template configured. Skipping HP check — treating as success.",
+                "warning",
+            )
+        return "success"
+
     def _save_error_screenshot(self, step_name):
         """Save a screenshot when an error occurs for debugging."""
         try:
@@ -596,26 +628,42 @@ class AutomationEngine:
             self._log(f"Failed to save error screenshot: {e}", "error")
             return None
 
-    def _run_step_with_retry(self, step_func, step_name, max_retries=None):
+    def _run_step_with_retry(self, step_func, step_name, max_retries=None,
+                             recovery_func=None, max_recovery=2):
         """Run a step function with retry logic.
         step_func should return (success, *results).
+        recovery_func: optional callable that re-executes the previous step
+            (e.g. pressing tab again) when all retries are exhausted.
+        max_recovery: how many times recovery can be attempted (default 2).
         Returns the step_func result on success, or None on all retries exhausted.
         """
         max_retries = max_retries if max_retries is not None else self._step_max_retries
-        for attempt in range(max_retries):
-            self._check_stop()
-            self._wait_pause()
-            result = step_func()
-            if result[0]:  # success
-                return result
-            if attempt < max_retries - 1:
-                self._log(f"Step '{step_name}' failed (attempt {attempt + 1}/{max_retries}), "
-                          f"retrying in {self._step_retry_delay}s...", "warning")
-                self._sleep(self._step_retry_delay)
+        recovery_count = 0
+        while True:
+            for attempt in range(max_retries):
+                self._check_stop()
+                self._wait_pause()
+                result = step_func()
+                if result[0]:  # success
+                    return result
+                if attempt < max_retries - 1:
+                    self._log(f"Step '{step_name}' failed (attempt {attempt + 1}/{max_retries}), "
+                              f"retrying in {self._step_retry_delay}s...", "warning")
+                    self._sleep(self._step_retry_delay)
+            # All retries exhausted — try recovery if available
+            if recovery_func and recovery_count < max_recovery:
+                recovery_count += 1
+                self._log(f"Step '{step_name}' failed after {max_retries} attempts. "
+                          f"Waiting 3s and re-executing previous step "
+                          f"(recovery {recovery_count}/{max_recovery})...", "warning")
+                self._sleep(3)
+                recovery_func()
+                self._sleep(1)
+                continue  # retry the step again
             else:
                 self._log(f"Step '{step_name}' failed after {max_retries} attempts", "error")
                 self._save_error_screenshot(step_name)
-        return None
+                return None
 
     def start(self):
         """Start automation in a new thread."""
@@ -693,11 +741,11 @@ class AutomationEngine:
                 if result == "success":
                     self.state = self.STATE_SUCCESS
                     self.stats.record_success()
-                    self._log("SUCCESS! MP 9 at Level 5 found!")
+                    self._log("SUCCESS! MP 9 + HP 70s at Level 5 found!")
                     self._log(f"Stats: {self.stats.total_iterations} iterations, "
                               f"{self.stats.elapsed_str()} elapsed")
                     self.telegram.send_message_async(
-                        f"LC AB: SUCCESS! Found MP 9 at Level 5. "
+                        f"LC AB: SUCCESS! Found MP 9 + HP 70s at Level 5. "
                         f"Iteration: {self.iteration_count}, "
                         f"Time: {self.stats.elapsed_str()}"
                     )
@@ -847,11 +895,17 @@ class AutomationEngine:
         self.current_step = 8
         self._log("Step 8: Opening inventory, clicking item...")
         self._check_stop()
-        self.input.press_key("tab")
+
+        def _press_tab():
+            self._log("Pressing tab to open inventory...")
+            self.input.press_key("tab")
+
+        _press_tab()
         self._sleep(1)
         result = self._run_step_with_retry(
             lambda: self._step_find_and_click("item_icon", "item_slot", double=True, timeout=10),
-            "find_item_icon")
+            "find_item_icon",
+            recovery_func=_press_tab)
         if result is None:
             return "error"
         self._sleep(1)
@@ -859,9 +913,15 @@ class AutomationEngine:
         # Step 9: Click text in popup
         self.current_step = 9
         self._log("Step 9: Clicking popup text...")
+
+        def _reclick_item():
+            self._log("Re-clicking item icon as recovery...")
+            self._step_find_and_click("item_icon", "item_slot", double=True, timeout=10)
+
         result = self._run_step_with_retry(
             lambda: self._step_find_and_click("popup_text", "popup_text", timeout=10),
-            "find_popup_text")
+            "find_popup_text",
+            recovery_func=_reclick_item)
         if result is None:
             return "error"
         self._sleep(1)
@@ -1347,6 +1407,24 @@ class AutomationEngine:
             if final_decision == "success":
                 pass_mp = actual_mp if actual_mp is not None else 9
                 self.stats.record_mp_pass(current_level, pass_mp, self.iteration_count)
+
+                # Take screenshot before HP check
+                self._save_error_screenshot("mp9_hp_check")
+
+                # Check HP using template matching (hp_6 = first digit is 6)
+                hp_region = self._abs_roi(self.config["roi"]["hp_display"])
+                hp_decision = self._classify_hp_from_templates(
+                    hp_region, strict_threshold
+                )
+
+                if hp_decision == "delete":
+                    self._log(
+                        f"MP={pass_mp} OK but HP is 60s. Deleting character."
+                    )
+                    self._exit_and_delete()
+                    return "delete_and_retry"
+
+                self._log(f"MP={pass_mp} OK and HP is 70s. Success!")
                 return "success"
 
             fail_mp = low_mp_value if low_mp_value is not None else (actual_mp or 0)

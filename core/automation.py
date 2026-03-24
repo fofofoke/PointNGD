@@ -123,6 +123,8 @@ class AutomationEngine:
         # Target window offset (for window-relative coordinates)
         self._win_offset_x = 0
         self._win_offset_y = 0
+        self._hid_recalibration_attempted = False
+        self._hid_fallback_to_host_click = False
         self._target_window_id = None
         # DPI ratio for scaling ROI/click coordinates (runtime / capture)
         self._roi_dpi_ratio = 1.0
@@ -272,7 +274,7 @@ class AutomationEngine:
         clicked in place so the verified position is not disturbed.
         """
         self._focus_and_validate(x, y, skip_focus)
-        if self.input.handles_positioning:
+        if self.input.handles_positioning and not self._hid_fallback_to_host_click:
             self.input.click(x, y)
             self._verify_hid_cursor(x, y)
         else:
@@ -283,7 +285,7 @@ class AutomationEngine:
     def _double_click(self, x, y, *, skip_focus=False):
         """Double-click at absolute screen coordinates (x, y)."""
         self._focus_and_validate(x, y, skip_focus)
-        if self.input.handles_positioning:
+        if self.input.handles_positioning and not self._hid_fallback_to_host_click:
             self.input.double_click(x, y)
             self._verify_hid_cursor(x, y)
         else:
@@ -310,6 +312,29 @@ class AutomationEngine:
                     f"Arduino coordinates are landing wrong!",
                     "warning",
                 )
+                if (not self._hid_recalibration_attempted and
+                        (abs(dx) > 100 or abs(dy) > 100)):
+                    calibrate = getattr(self.input, "_calibrate_hid", None)
+                    if callable(calibrate):
+                        self._hid_recalibration_attempted = True
+                        self._log(
+                            "Large HID mismatch detected. Attempting one-time "
+                            "Arduino HID recalibration.",
+                            "warning",
+                        )
+                        try:
+                            calibrate()
+                        except Exception as e:
+                            logger.warning("One-time HID recalibration failed: %s", e)
+                elif (self._hid_recalibration_attempted and
+                      (abs(dx) > 100 or abs(dy) > 100) and
+                      not self._hid_fallback_to_host_click):
+                    self._hid_fallback_to_host_click = True
+                    self._log(
+                        "HID mismatch persists after recalibration. "
+                        "Switching to host cursor move + native click fallback.",
+                        "warning",
+                    )
             else:
                 logger.debug(
                     "HID cursor OK: intended (%d,%d) actual (%d,%d)",
@@ -581,6 +606,15 @@ class AutomationEngine:
         korean_method = self.config.get("korean_input_method", "clipboard")
         self.input = create_input_handler(method, port, baudrate, korean_method)
         self._log(f"Input method: {method}")
+        if method == "arduino":
+            fail_fast = self.config.get("arduino_hid_fail_fast", True)
+            hid_ok = getattr(self.input, "hid_mapping_ok", True)
+            if fail_fast and not hid_ok:
+                raise RuntimeError(
+                    "Arduino HID startup sanity check failed. "
+                    "Stopping early to avoid repeated wrong clicks. "
+                    "Re-upload firmware and check DPI/Windows display settings."
+                )
 
     def _run_loop(self):
         """Main automation loop."""

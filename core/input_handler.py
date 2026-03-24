@@ -8,6 +8,37 @@ import platform
 logger = logging.getLogger(__name__)
 
 
+def _ensure_win32_dpi_awareness():
+    """Best-effort: force a DPI-aware context for consistent Win32 coordinates.
+
+    On Windows with scaling (e.g. 150%), mixing DPI-aware and DPI-unaware calls
+    can yield mismatched coordinate spaces (logical vs physical pixels). HID
+    absolute mapping relies on physical coordinates, so we opt into the highest
+    awareness context available.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        # Prefer per-monitor v2 (Windows 10+)
+        if hasattr(user32, "SetProcessDpiAwarenessContext"):
+            # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+            if user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
+                return
+        # Fallback for older versions
+        shcore = getattr(ctypes.windll, "shcore", None)
+        if shcore and hasattr(shcore, "SetProcessDpiAwareness"):
+            # PROCESS_PER_MONITOR_DPI_AWARE = 2
+            shcore.SetProcessDpiAwareness(2)
+            return
+        if hasattr(user32, "SetProcessDPIAware"):
+            user32.SetProcessDPIAware()
+    except Exception:
+        # Non-fatal: keep running with whatever context is available.
+        pass
+
+
 def _set_cursor_pos(x, y, *, window_id=None):
     """Move cursor to (x, y) using native OS API (physical pixels).
 
@@ -505,13 +536,92 @@ class ArduinoInput(InputHandler):
     def __init__(self, port="COM3", baudrate=9600, korean_method="clipboard"):
         super().__init__(korean_method)
         import serial
+        _ensure_win32_dpi_awareness()
         self.serial = serial.Serial(port, baudrate, timeout=2)
+        self.firmware_version = None
+        self.hid_mapping_ok = True
         time.sleep(2)  # Wait for Arduino reset
         self._drain_serial()  # Discard READY message from Arduino boot
+        self._probe_firmware_version()
         logger.info(f"Arduino connected on {port}")
         # Send screen resolution so Arduino can map absolute coordinates
         self._send_screen_info()
         self._calibrate_hid()
+        self._sanity_check_hid_mapping()
+
+    def _probe_firmware_version(self):
+        """Query firmware version if supported.
+
+        Newer firmware responds to `VERSION` with `VER:x.y.z`.
+        Older firmware may reply `ERR:UNKNOWN` or nothing.
+        """
+        old_timeout = self.serial.timeout
+        self.serial.timeout = 0.4
+        try:
+            self.serial.write(b"VERSION\n")
+            self.serial.flush()
+            line = self.serial.readline().decode("utf-8").strip()
+            if line.startswith("VER:"):
+                self.firmware_version = line.split(":", 1)[1].strip()
+                logger.info("Arduino firmware version: %s", self.firmware_version)
+            else:
+                logger.warning(
+                    "Arduino firmware version probe unavailable (response=%r). "
+                    "If HID clicks are offset, re-upload latest "
+                    "arduino/lineage_hid/lineage_hid.ino.",
+                    line,
+                )
+        except Exception as e:
+            logger.warning("Arduino firmware version probe failed: %s", e)
+        finally:
+            self.serial.timeout = old_timeout
+
+    def _sanity_check_hid_mapping(self):
+        """Best-effort startup check for HID absolute mapping accuracy."""
+        if platform.system() != "Windows":
+            return True
+        try:
+            import ctypes
+            import ctypes.wintypes
+            user32 = ctypes.windll.user32
+            origin_x = user32.GetSystemMetrics(76)   # SM_XVIRTUALSCREEN
+            origin_y = user32.GetSystemMetrics(77)   # SM_YVIRTUALSCREEN
+            width = user32.GetSystemMetrics(78)      # SM_CXVIRTUALSCREEN
+            height = user32.GetSystemMetrics(79)     # SM_CYVIRTUALSCREEN
+            tx = origin_x + width // 2
+            ty = origin_y + height // 2
+
+            pt = ctypes.wintypes.POINT()
+            user32.GetCursorPos(ctypes.byref(pt))
+            saved_x, saved_y = pt.x, pt.y
+
+            self._send(f"MOVE {tx} {ty}")
+            time.sleep(0.1)
+            user32.GetCursorPos(ctypes.byref(pt))
+            ax, ay = pt.x, pt.y
+            user32.SetCursorPos(saved_x, saved_y)
+
+            err_x = abs(ax - tx)
+            err_y = abs(ay - ty)
+            if err_x > 120 or err_y > 120:
+                self.hid_mapping_ok = False
+                logger.warning(
+                    "Startup HID sanity check failed: intended (%d,%d) "
+                    "actual (%d,%d) err=(%d,%d). "
+                    "Arduino absolute mapping may still be inaccurate.",
+                    tx, ty, ax, ay, err_x, err_y,
+                )
+            else:
+                self.hid_mapping_ok = True
+                logger.info(
+                    "Startup HID sanity check OK: err=(%d,%d)",
+                    err_x, err_y,
+                )
+            return self.hid_mapping_ok
+        except Exception as e:
+            self.hid_mapping_ok = False
+            logger.warning("Startup HID sanity check failed: %s", e)
+            return False
 
     def _drain_serial(self):
         """Discard any pending data in serial buffer (e.g. READY message).
@@ -657,12 +767,32 @@ class ArduinoInput(InputHandler):
                 f"SCREEN {real_origin_x} {real_origin_y} "
                 f"{real_width} {real_height}"
             )
-            logger.info(
-                f"HID calibrated: original=({origin_x},{origin_y} "
-                f"{width}x{height}) -> corrected=({real_origin_x},"
-                f"{real_origin_y} {real_width}x{real_height}) "
-                f"scale=({scale_x:.3f},{scale_y:.3f})"
-            )
+            # Validate that correction really improves landing error.
+            verify_tx = origin_x + width // 2
+            verify_ty = origin_y + height // 2
+            self._send(f"MOVE {verify_tx} {verify_ty}")
+            time.sleep(0.1)
+            user32.GetCursorPos(ctypes.byref(pt))
+            vx, vy = pt.x, pt.y
+            err_x = abs(vx - verify_tx)
+            err_y = abs(vy - verify_ty)
+
+            # If calibration is clearly wrong (e.g. cursor clipping/game lock),
+            # restore the original mapping to avoid making clicks worse.
+            if err_x > 120 or err_y > 120:
+                self._send(f"SCREEN {origin_x} {origin_y} {width} {height}")
+                logger.warning(
+                    "HID calibration rejected (verify error too large: "
+                    f"dx={err_x}, dy={err_y}). Restored original SCREEN."
+                )
+            else:
+                logger.info(
+                    f"HID calibrated: original=({origin_x},{origin_y} "
+                    f"{width}x{height}) -> corrected=({real_origin_x},"
+                    f"{real_origin_y} {real_width}x{real_height}) "
+                    f"scale=({scale_x:.3f},{scale_y:.3f}) "
+                    f"verify_err=({err_x},{err_y})"
+                )
 
         except Exception as e:
             logger.warning(f"HID calibration failed: {e}")

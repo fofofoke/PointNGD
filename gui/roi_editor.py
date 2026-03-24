@@ -56,6 +56,7 @@ class ROIEditor(tk.Toplevel):
         "delete_popup": "Delete Popup Area",
         "exp_display": "EXP Display Area (Stuck Detection)",
         "hp_display": "HP Display Area (Death Detection)",
+        "game_entered": "Game Entered Screen (Post-Login Verify)",
     }
 
     # ROI keys that correspond to an image template in config["images"]
@@ -64,6 +65,7 @@ class ROIEditor(tk.Toplevel):
         "item_slot", "popup_text", "scarecrow_search", "level_display",
         "mp_display", "exit_button", "delete_popup",
         "level_5", "mp_2", "mp_3", "mp_4", "mp_5", "mp_6", "mp_7", "mp_8",
+        "game_entered",
     }
 
     # Template-only entries that share another entry's ROI coordinates.

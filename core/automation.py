@@ -777,6 +777,19 @@ class AutomationEngine:
         wait_time = self.config.get("wait_after_enter_game", 5)
         self._sleep(wait_time)
 
+        # Verify game screen loaded before pressing tab
+        game_entered_img = self.config["images"].get("game_entered", "")
+        if game_entered_img:
+            self._log("Waiting for game screen to load (game_entered image)...")
+            found, _, _, conf = self._wait_and_find("game_entered", "game_entered", timeout=15)
+            if found:
+                self._log(f"Game screen confirmed (conf={conf:.3f}). Waiting 3s before tab...")
+                self._sleep(3)
+            else:
+                self._log("game_entered image not found within timeout, proceeding anyway...", "warning")
+        else:
+            self._log("No game_entered image configured, skipping verification.")
+
         # Step 8: Press tab, double-click item
         self.current_step = 8
         self._log("Step 8: Opening inventory, clicking item...")

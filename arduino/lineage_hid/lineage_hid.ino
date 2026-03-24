@@ -224,19 +224,24 @@ bool handleMove(String params) {
 
 void moveMouseAbsolute(int targetX, int targetY) {
   /*
-   * Convert screen pixel coordinates to HID absolute range (0-32767).
-   * Windows maps HID absolute coordinates to the virtual desktop
-   * (the combined area of all monitors).
+   * Convert screen pixel coordinates to HID-Project AbsoluteMouse range.
+   *
+   * HID-Project's moveTo() expects signed input (-32768 to 32767) and
+   * internally converts to the HID report range (0-32767) via:
+   *   report.xAxis = ((int32_t)x + 32768) / 2
+   *
+   * So to place the cursor at fraction f (0.0-1.0) of the screen:
+   *   input = f * 65535 - 32768
    *
    * The PC sends SCREEN originX originY width height on connect,
    * so we know the virtual desktop dimensions.
    */
-  long absX = ((long)(targetX - screenOriginX) * 32767L) / screenWidth;
-  long absY = ((long)(targetY - screenOriginY) * 32767L) / screenHeight;
+  long absX = ((long)(targetX - screenOriginX) * 65535L) / screenWidth - 32768L;
+  long absY = ((long)(targetY - screenOriginY) * 65535L) / screenHeight - 32768L;
 
   // Clamp to valid range
-  absX = constrain(absX, 0, 32767);
-  absY = constrain(absY, 0, 32767);
+  absX = constrain(absX, -32768, 32767);
+  absY = constrain(absY, -32768, 32767);
 
   AbsoluteMouse.moveTo(absX, absY);
 

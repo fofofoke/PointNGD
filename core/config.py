@@ -68,6 +68,7 @@ DEFAULT_CONFIG = {
         "death_screen": "",
         "revival_button": "",
         "game_entered": "",
+        "hp_6": "",
     },
     "strict_template_threshold": 0.9,
     "image_thresholds": {},

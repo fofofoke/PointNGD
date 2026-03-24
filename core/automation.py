@@ -583,6 +583,38 @@ class AutomationEngine:
             f"(best_conf={best_conf:.3f}). Treating as MP>=9.",
         )
 
+    def _classify_hp_from_templates(self, hp_region, strict_threshold):
+        """Classify HP using template matching after MP=9 confirmed.
+
+        Checks if the first digit of HP is 6 (60s) using hp_6 template.
+        Returns:
+            "delete" if HP is 60s (hp_6 matched)
+            "success" if HP is 70s (hp_6 not matched)
+        """
+        hp6_path = self.config["images"].get("hp_6", "")
+        if hp6_path and os.path.exists(hp6_path):
+            hp6_threshold = self._get_image_threshold("hp_6", strict_threshold)
+            found_hp6, _, _, conf_hp6 = self.recognizer.find_template_in_region(
+                hp6_path, hp_region, threshold=hp6_threshold
+            )
+            if found_hp6:
+                self._log(
+                    f"HP first digit is 6 (hp_6 matched, conf={conf_hp6:.3f}). "
+                    f"HP is in 60s — deleting.",
+                    "warning",
+                )
+                return "delete"
+            self._log(
+                f"HP first digit is not 6 (hp_6 best_conf={conf_hp6:.3f}). "
+                f"Treating as 70s — success."
+            )
+        else:
+            self._log(
+                "No hp_6 template configured. Skipping HP check — treating as success.",
+                "warning",
+            )
+        return "success"
+
     def _save_error_screenshot(self, step_name):
         """Save a screenshot when an error occurs for debugging."""
         try:
@@ -709,11 +741,11 @@ class AutomationEngine:
                 if result == "success":
                     self.state = self.STATE_SUCCESS
                     self.stats.record_success()
-                    self._log("SUCCESS! MP 9 at Level 5 found!")
+                    self._log("SUCCESS! MP 9 + HP 70s at Level 5 found!")
                     self._log(f"Stats: {self.stats.total_iterations} iterations, "
                               f"{self.stats.elapsed_str()} elapsed")
                     self.telegram.send_message_async(
-                        f"LC AB: SUCCESS! Found MP 9 at Level 5. "
+                        f"LC AB: SUCCESS! Found MP 9 + HP 70s at Level 5. "
                         f"Iteration: {self.iteration_count}, "
                         f"Time: {self.stats.elapsed_str()}"
                     )
@@ -1375,6 +1407,24 @@ class AutomationEngine:
             if final_decision == "success":
                 pass_mp = actual_mp if actual_mp is not None else 9
                 self.stats.record_mp_pass(current_level, pass_mp, self.iteration_count)
+
+                # Take screenshot before HP check
+                self._save_error_screenshot("mp9_hp_check")
+
+                # Check HP using template matching (hp_6 = first digit is 6)
+                hp_region = self._abs_roi(self.config["roi"]["hp_display"])
+                hp_decision = self._classify_hp_from_templates(
+                    hp_region, strict_threshold
+                )
+
+                if hp_decision == "delete":
+                    self._log(
+                        f"MP={pass_mp} OK but HP is 60s. Deleting character."
+                    )
+                    self._exit_and_delete()
+                    return "delete_and_retry"
+
+                self._log(f"MP={pass_mp} OK and HP is 70s. Success!")
                 return "success"
 
             fail_mp = low_mp_value if low_mp_value is not None else (actual_mp or 0)

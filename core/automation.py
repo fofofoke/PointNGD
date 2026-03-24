@@ -1269,10 +1269,10 @@ class AutomationEngine:
                     final_decision = "delete"
                     low_mp_value = actual_mp
             else:
-                # OCR failed twice: match mp_2~mp_8 templates with strict threshold.
+                # OCR failed twice: match mp_1~mp_8 templates with strict threshold.
                 matched_low = None
                 best_conf = 0.0
-                for mp_val in range(2, 9):
+                for mp_val in range(1, 9):
                     key = f"mp_{mp_val}"
                     path = self.config["images"].get(key, "")
                     if not path or not os.path.exists(path):
@@ -1300,7 +1300,7 @@ class AutomationEngine:
                 else:
                     final_decision = "success"
                     self._log(
-                        f"MP OCR failed twice and no mp_2~mp_8 matched "
+                        f"MP OCR failed twice and no mp_1~mp_8 matched "
                         f"(best_conf={best_conf:.3f}). Treating as MP>=9.",
                         "warning",
                     )

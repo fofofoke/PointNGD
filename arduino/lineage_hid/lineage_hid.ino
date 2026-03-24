@@ -155,20 +155,36 @@ bool handleType(String text) {
 }
 
 bool handleKey(String keyName) {
-  uint8_t key = resolveKey(keyName);
-  if (key == 0) {
-    Serial.println("ERR:UNKNOWN_KEY");
-    return false;
+  keyName.trim();
+
+  // Try named key first (KeyboardKeycode overload → raw HID keycode)
+  KeyboardKeycode kc = resolveNamedKey(keyName);
+  if (kc != (KeyboardKeycode)0) {
+    Keyboard.press(kc);
+    delay(50);
+    Keyboard.release(kc);
+    return true;
   }
-  Keyboard.press(key);
-  delay(50);
-  Keyboard.release(key);
-  return true;
+
+  // Single character fallback (uint8_t overload → ASCII lookup)
+  if (keyName.length() == 1) {
+    uint8_t ch = keyName.charAt(0);
+    Keyboard.press(ch);
+    delay(50);
+    Keyboard.release(ch);
+    return true;
+  }
+
+  Serial.println("ERR:UNKNOWN_KEY");
+  return false;
 }
 
 bool handleHotkey(String combo) {
   // Parse key1+key2+key3...
-  uint8_t keys[4];
+  // Each key is stored with a flag: isKeycode indicates KeyboardKeycode vs ASCII
+  KeyboardKeycode keycodes[4];
+  uint8_t chars[4];
+  bool isKeycode[4];
   int keyCount = 0;
 
   int start = 0;
@@ -183,9 +199,18 @@ bool handleHotkey(String combo) {
       start = plusIdx + 1;
     }
     keyStr.trim();
-    uint8_t key = resolveKey(keyStr);
-    if (key > 0) {
-      keys[keyCount++] = key;
+
+    KeyboardKeycode kc = resolveNamedKey(keyStr);
+    if (kc != (KeyboardKeycode)0) {
+      keycodes[keyCount] = kc;
+      chars[keyCount] = 0;
+      isKeycode[keyCount] = true;
+      keyCount++;
+    } else if (keyStr.length() == 1) {
+      keycodes[keyCount] = (KeyboardKeycode)0;
+      chars[keyCount] = keyStr.charAt(0);
+      isKeycode[keyCount] = false;
+      keyCount++;
     }
   }
 
@@ -196,13 +221,21 @@ bool handleHotkey(String combo) {
 
   // Press all keys
   for (int i = 0; i < keyCount; i++) {
-    Keyboard.press(keys[i]);
+    if (isKeycode[i]) {
+      Keyboard.press(keycodes[i]);
+    } else {
+      Keyboard.press(chars[i]);
+    }
     delay(30);
   }
   delay(50);
   // Release all keys in reverse
   for (int i = keyCount - 1; i >= 0; i--) {
-    Keyboard.release(keys[i]);
+    if (isKeycode[i]) {
+      Keyboard.release(keycodes[i]);
+    } else {
+      Keyboard.release(chars[i]);
+    }
     delay(30);
   }
   return true;
@@ -249,7 +282,9 @@ void moveMouseAbsolute(int targetX, int targetY) {
   currentY = targetY;
 }
 
-uint8_t resolveKey(String keyName) {
+// Resolve named key to KeyboardKeycode.
+// Returns (KeyboardKeycode)0 if not a named key.
+KeyboardKeycode resolveNamedKey(String keyName) {
   keyName.toLowerCase();
   keyName.trim();
 
@@ -258,7 +293,7 @@ uint8_t resolveKey(String keyName) {
   if (keyName == "esc" || keyName == "escape") return KEY_ESC;
   if (keyName == "backspace") return KEY_BACKSPACE;
   if (keyName == "delete" || keyName == "del") return KEY_DELETE;
-  if (keyName == "space") return ' ';
+  if (keyName == "space") return KEY_SPACE;
   if (keyName == "up") return KEY_UP_ARROW;
   if (keyName == "down") return KEY_DOWN_ARROW;
   if (keyName == "left") return KEY_LEFT_ARROW;
@@ -279,10 +314,5 @@ uint8_t resolveKey(String keyName) {
   if (keyName == "f11") return KEY_F11;
   if (keyName == "f12") return KEY_F12;
 
-  // Single character
-  if (keyName.length() == 1) {
-    return keyName.charAt(0);
-  }
-
-  return 0;
+  return (KeyboardKeycode)0;
 }

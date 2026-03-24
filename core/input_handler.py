@@ -539,6 +539,8 @@ class ArduinoInput(InputHandler):
         _ensure_win32_dpi_awareness()
         self.serial = serial.Serial(port, baudrate, timeout=2)
         self.firmware_version = None
+        # Used by AutomationEngine fail-fast guard to avoid misclick loops
+        # when startup HID mapping sanity check fails.
         self.hid_mapping_ok = True
         time.sleep(2)  # Wait for Arduino reset
         self._drain_serial()  # Discard READY message from Arduino boot

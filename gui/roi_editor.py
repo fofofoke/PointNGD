@@ -45,6 +45,7 @@ class ROIEditor(tk.Toplevel):
         "level_display": "Level Display Area",
         "level_5": "Level 5 Template (uses Level Display ROI)",
         "mp_display": "MP Display Area",
+        "mp_1": "MP 1 Template (uses MP Display ROI)",
         "mp_2": "MP 2 Template (uses MP Display ROI)",
         "mp_3": "MP 3 Template (uses MP Display ROI)",
         "mp_4": "MP 4 Template (uses MP Display ROI)",
@@ -64,7 +65,7 @@ class ROIEditor(tk.Toplevel):
         "empty_slot", "knight_icon", "knight_verify", "confirm_button",
         "item_slot", "popup_text", "scarecrow_search", "level_display",
         "mp_display", "exit_button", "delete_popup",
-        "level_5", "mp_2", "mp_3", "mp_4", "mp_5", "mp_6", "mp_7", "mp_8",
+        "level_5", "mp_1", "mp_2", "mp_3", "mp_4", "mp_5", "mp_6", "mp_7", "mp_8",
         "game_entered",
     }
 
@@ -73,6 +74,7 @@ class ROIEditor(tk.Toplevel):
     # parent ROI for capture/test but store a separate template image.
     SHARED_ROI = {
         "level_5": "level_display",
+        "mp_1": "mp_display",
         "mp_2": "mp_display",
         "mp_3": "mp_display",
         "mp_4": "mp_display",

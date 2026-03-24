@@ -116,7 +116,7 @@ class TestConfig(unittest.TestCase):
             "empty_slot", "knight_icon", "knight_verify", "confirm_button",
             "item_icon", "popup_text", "scarecrow", "exit_button",
             "delete_popup", "death_screen", "revival_button",
-            "level_5", "mp_2", "mp_3", "mp_4", "mp_5", "mp_6", "mp_7", "mp_8",
+            "level_5", "mp_1", "mp_2", "mp_3", "mp_4", "mp_5", "mp_6", "mp_7", "mp_8",
         ]
         for key in required_images:
             self.assertIn(key, DEFAULT_CONFIG["images"],
@@ -557,6 +557,62 @@ class TestAutomationEngine(unittest.TestCase):
         self.assertIsNone(engine._get_image_threshold("bad_low"))
         self.assertIsNone(engine._get_image_threshold("bad_high"))
 
+    def test_classify_mp_from_templates_mp1_is_delete(self):
+        """mp_1~mp_8 template match should go to delete branch."""
+        from core.automation import AutomationEngine
+        from core.config import load_config
+        tmpdir = tempfile.mkdtemp()
+        try:
+            config = load_config("/nonexistent/config.json")
+            mp1_path = os.path.join(tmpdir, "mp_1.png")
+            with open(mp1_path, "wb") as f:
+                f.write(b"x")
+            config["images"]["mp_1"] = mp1_path
+            engine = AutomationEngine(config)
+
+            class DummyRecognizer:
+                def find_template_in_region(self, template_path, region, threshold=None):
+                    if template_path == mp1_path:
+                        return True, 0, 0, 1.0
+                    return False, 0, 0, 0.0
+
+            engine.recognizer = DummyRecognizer()
+            decision, low_mp, _ = engine._classify_mp_from_templates(
+                {"x": 0, "y": 0, "w": 1, "h": 1}, 0.9
+            )
+            self.assertEqual(decision, "delete")
+            self.assertEqual(low_mp, 1)
+        finally:
+            shutil.rmtree(tmpdir)
+
+    def test_classify_mp_from_templates_mp2_is_delete(self):
+        """mp_2~mp_8 template match should go to delete branch."""
+        from core.automation import AutomationEngine
+        from core.config import load_config
+        tmpdir = tempfile.mkdtemp()
+        try:
+            config = load_config("/nonexistent/config.json")
+            mp2_path = os.path.join(tmpdir, "mp_2.png")
+            with open(mp2_path, "wb") as f:
+                f.write(b"x")
+            config["images"]["mp_2"] = mp2_path
+            engine = AutomationEngine(config)
+
+            class DummyRecognizer:
+                def find_template_in_region(self, template_path, region, threshold=None):
+                    if template_path == mp2_path:
+                        return True, 0, 0, 0.99
+                    return False, 0, 0, 0.0
+
+            engine.recognizer = DummyRecognizer()
+            decision, low_mp, _ = engine._classify_mp_from_templates(
+                {"x": 0, "y": 0, "w": 1, "h": 1}, 0.9
+            )
+            self.assertEqual(decision, "delete")
+            self.assertEqual(low_mp, 2)
+        finally:
+            shutil.rmtree(tmpdir)
+
     def test_config_image_thresholds_default_empty(self):
         """Default config should have empty image_thresholds dict."""
         from core.config import DEFAULT_CONFIG
@@ -753,7 +809,7 @@ class TestWorkflowIntegrity(unittest.TestCase):
             "confirm_button", "item_icon", "popup_text",
             "scarecrow", "exit_button", "delete_popup",
             "death_screen", "revival_button",
-            "level_5", "mp_2", "mp_3", "mp_4", "mp_5", "mp_6", "mp_7", "mp_8",
+            "level_5", "mp_1", "mp_2", "mp_3", "mp_4", "mp_5", "mp_6", "mp_7", "mp_8",
         ]
         for key in required_images:
             self.assertIn(key, DEFAULT_CONFIG["images"],

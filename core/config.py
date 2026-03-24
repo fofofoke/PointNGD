@@ -55,6 +55,7 @@ DEFAULT_CONFIG = {
         "level_display": "",
         "mp_display": "",
         "level_5": "",
+        "mp_1": "",
         "mp_2": "",
         "mp_3": "",
         "mp_4": "",

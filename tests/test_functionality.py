@@ -102,7 +102,8 @@ class TestConfig(unittest.TestCase):
         from core.config import DEFAULT_CONFIG
         required_clicks = [
             "knight_verify_click", "stat_click", "name_input_click",
-            "character_slot_click", "after_enter_click",
+            "character_slot_click", "enter_character_slot_click",
+            "delete_character_slot_click", "after_enter_click",
             "exit_confirm_click", "delete_click",
         ]
         for key in required_clicks:
@@ -776,7 +777,8 @@ class TestWorkflowIntegrity(unittest.TestCase):
         from core.config import DEFAULT_CONFIG
         required_clicks = [
             "knight_verify_click", "stat_click", "name_input_click",
-            "character_slot_click", "after_enter_click",
+            "character_slot_click", "enter_character_slot_click",
+            "delete_character_slot_click", "after_enter_click",
             "exit_confirm_click", "delete_click",
         ]
         for key in required_clicks:

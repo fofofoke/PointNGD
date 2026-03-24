@@ -35,7 +35,11 @@ DEFAULT_CONFIG = {
         "knight_verify_click": {"x": 0, "y": 0},
         "stat_click": {"x": 0, "y": 0},
         "name_input_click": {"x": 0, "y": 0},
+        # Legacy shared slot key (kept for backward compatibility)
         "character_slot_click": {"x": 0, "y": 0},
+        # Separate slot click points for workflow steps
+        "enter_character_slot_click": {"x": 0, "y": 0},   # Step 7
+        "delete_character_slot_click": {"x": 0, "y": 0},  # Step 13
         "after_enter_click": {"x": 0, "y": 0},
         "exit_confirm_click": {"x": 0, "y": 0},
         "delete_click": {"x": 0, "y": 0},

@@ -581,15 +581,29 @@ class ROIEditor(tk.Toplevel):
             return False
 
         click_positions = self.config.setdefault("click_positions", {})
-        cur = click_positions.get(click_key, {"x": 0, "y": 0})
-        if cur.get("x", 0) != 0 or cur.get("y", 0) != 0:
-            return False
-
-        click_positions[click_key] = {
+        target = {
             "x": int(roi["x"] + roi["w"] / 2),
             "y": int(roi["y"] + roi["h"] / 2),
         }
-        return True
+
+        updated = False
+
+        def _set_if_unset(key):
+            nonlocal updated
+            cur = click_positions.get(key, {"x": 0, "y": 0})
+            if cur.get("x", 0) == 0 and cur.get("y", 0) == 0:
+                click_positions[key] = dict(target)
+                updated = True
+
+        # Existing mapped key
+        _set_if_unset(click_key)
+
+        # For empty slot, also initialize the new per-step character slot keys.
+        if roi_key == "empty_slot":
+            _set_if_unset("enter_character_slot_click")
+            _set_if_unset("delete_character_slot_click")
+
+        return updated
 
     # ------------------------------------------------------------------
     # Manual ROI entry
@@ -1004,7 +1018,9 @@ class ClickPositionEditor(tk.Toplevel):
         "knight_verify_click": "Knight Verify Click Position",
         "stat_click": "Stat Click Position (4x after verify)",
         "name_input_click": "Name Input Click Position",
-        "character_slot_click": "Character Slot Click Position",
+        "character_slot_click": "Character Slot Click Position (Legacy Shared)",
+        "enter_character_slot_click": "Enter Game Character Slot (Step 7)",
+        "delete_character_slot_click": "Delete Character Slot (Step 13)",
         "after_enter_click": "After Enter Game Click Position",
         "exit_confirm_click": "Exit Confirm Click Position",
         "delete_click": "Delete Button Click Position",

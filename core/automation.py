@@ -257,6 +257,17 @@ class AutomationEngine:
             "y": round(pos["y"] * r) + self._win_offset_y,
         }
 
+    def _get_click_pos_with_fallback(self, primary_key, fallback_key):
+        """Return absolute click position for primary key, fallback if unset.
+
+        A position is treated as unset when key is missing or both x/y are 0.
+        """
+        click_positions = self.config.get("click_positions", {})
+        primary = click_positions.get(primary_key)
+        if primary and (primary.get("x", 0) != 0 or primary.get("y", 0) != 0):
+            return self._abs_pos(primary)
+        return self._abs_pos(click_positions.get(fallback_key, {"x": 0, "y": 0}))
+
     # ------------------------------------------------------------------
     # Centralised click helpers – every click in the bot flows through
     # these two methods so that:
@@ -771,7 +782,9 @@ class AutomationEngine:
         self._log("Step 7: Entering game...")
         self._check_stop()
         self._refresh_window()
-        char_pos = self._abs_pos(self.config["click_positions"]["character_slot_click"])
+        char_pos = self._get_click_pos_with_fallback(
+            "enter_character_slot_click", "character_slot_click"
+        )
         self._sleep(1)
         self._double_click(char_pos["x"], char_pos["y"])
         wait_time = self.config.get("wait_after_enter_game", 5)
@@ -1359,7 +1372,9 @@ class AutomationEngine:
         self.current_step = 13
         self._log("Step 13: Deleting character...")
         self._refresh_window()
-        char_pos = self._abs_pos(self.config["click_positions"]["character_slot_click"])
+        char_pos = self._get_click_pos_with_fallback(
+            "delete_character_slot_click", "character_slot_click"
+        )
         self._click(char_pos["x"], char_pos["y"])
         self._sleep(0.5)
 

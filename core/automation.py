@@ -596,26 +596,42 @@ class AutomationEngine:
             self._log(f"Failed to save error screenshot: {e}", "error")
             return None
 
-    def _run_step_with_retry(self, step_func, step_name, max_retries=None):
+    def _run_step_with_retry(self, step_func, step_name, max_retries=None,
+                             recovery_func=None, max_recovery=2):
         """Run a step function with retry logic.
         step_func should return (success, *results).
+        recovery_func: optional callable that re-executes the previous step
+            (e.g. pressing tab again) when all retries are exhausted.
+        max_recovery: how many times recovery can be attempted (default 2).
         Returns the step_func result on success, or None on all retries exhausted.
         """
         max_retries = max_retries if max_retries is not None else self._step_max_retries
-        for attempt in range(max_retries):
-            self._check_stop()
-            self._wait_pause()
-            result = step_func()
-            if result[0]:  # success
-                return result
-            if attempt < max_retries - 1:
-                self._log(f"Step '{step_name}' failed (attempt {attempt + 1}/{max_retries}), "
-                          f"retrying in {self._step_retry_delay}s...", "warning")
-                self._sleep(self._step_retry_delay)
+        recovery_count = 0
+        while True:
+            for attempt in range(max_retries):
+                self._check_stop()
+                self._wait_pause()
+                result = step_func()
+                if result[0]:  # success
+                    return result
+                if attempt < max_retries - 1:
+                    self._log(f"Step '{step_name}' failed (attempt {attempt + 1}/{max_retries}), "
+                              f"retrying in {self._step_retry_delay}s...", "warning")
+                    self._sleep(self._step_retry_delay)
+            # All retries exhausted — try recovery if available
+            if recovery_func and recovery_count < max_recovery:
+                recovery_count += 1
+                self._log(f"Step '{step_name}' failed after {max_retries} attempts. "
+                          f"Waiting 3s and re-executing previous step "
+                          f"(recovery {recovery_count}/{max_recovery})...", "warning")
+                self._sleep(3)
+                recovery_func()
+                self._sleep(1)
+                continue  # retry the step again
             else:
                 self._log(f"Step '{step_name}' failed after {max_retries} attempts", "error")
                 self._save_error_screenshot(step_name)
-        return None
+                return None
 
     def start(self):
         """Start automation in a new thread."""
@@ -847,11 +863,17 @@ class AutomationEngine:
         self.current_step = 8
         self._log("Step 8: Opening inventory, clicking item...")
         self._check_stop()
-        self.input.press_key("tab")
+
+        def _press_tab():
+            self._log("Pressing tab to open inventory...")
+            self.input.press_key("tab")
+
+        _press_tab()
         self._sleep(1)
         result = self._run_step_with_retry(
             lambda: self._step_find_and_click("item_icon", "item_slot", double=True, timeout=10),
-            "find_item_icon")
+            "find_item_icon",
+            recovery_func=_press_tab)
         if result is None:
             return "error"
         self._sleep(1)
@@ -859,9 +881,15 @@ class AutomationEngine:
         # Step 9: Click text in popup
         self.current_step = 9
         self._log("Step 9: Clicking popup text...")
+
+        def _reclick_item():
+            self._log("Re-clicking item icon as recovery...")
+            self._step_find_and_click("item_icon", "item_slot", double=True, timeout=10)
+
         result = self._run_step_with_retry(
             lambda: self._step_find_and_click("popup_text", "popup_text", timeout=10),
-            "find_popup_text")
+            "find_popup_text",
+            recovery_func=_reclick_item)
         if result is None:
             return "error"
         self._sleep(1)

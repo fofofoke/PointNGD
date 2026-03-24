@@ -255,6 +255,16 @@ class ImageRecognition:
         if template is None:
             return False, 0, 0, 0
 
+        # Template must not be larger than the source image
+        th, tw = template.shape[:2]
+        sh, sw = screen_img.shape[:2]
+        if th > sh or tw > sw:
+            logger.debug(
+                "Template (%dx%d) larger than screen image (%dx%d), skipping: %s",
+                tw, th, sw, sh, template_path,
+            )
+            return False, 0, 0, 0
+
         result = cv2.matchTemplate(screen_img, template, cv2.TM_CCOEFF_NORMED)
         min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
 
@@ -298,6 +308,16 @@ class ImageRecognition:
         threshold = threshold or self.match_threshold
         template = self._load_template(template_path)
         if template is None:
+            return []
+
+        # Template must not be larger than the source image
+        th, tw = template.shape[:2]
+        sh, sw = screen_img.shape[:2]
+        if th > sh or tw > sw:
+            logger.debug(
+                "Template (%dx%d) larger than screen image (%dx%d), skipping: %s",
+                tw, th, sw, sh, template_path,
+            )
             return []
 
         result = cv2.matchTemplate(screen_img, template, cv2.TM_CCOEFF_NORMED)
@@ -411,6 +431,16 @@ class ImageRecognition:
             search_img = screen
             if hsv_mask is not None:
                 search_img = cv2.bitwise_and(screen, screen, mask=hsv_mask)
+
+            # Template must not be larger than the search image
+            th, tw = template.shape[:2]
+            sh, sw = search_img.shape[:2]
+            if th > sh or tw > sw:
+                logger.debug(
+                    "Template (%dx%d) larger than search image (%dx%d), skipping: %s",
+                    tw, th, sw, sh, tmpl_path,
+                )
+                continue
 
             result = cv2.matchTemplate(search_img, template, cv2.TM_CCOEFF_NORMED)
             h, w = template.shape[:2]
@@ -619,7 +649,11 @@ class ImageRecognition:
         img2 = cv2.imread(img2_path)
         if img1 is None or img2 is None:
             return 0.0
+        # Resize img2 to match img1 if dimensions differ
         if img1.shape != img2.shape:
             img2 = cv2.resize(img2, (img1.shape[1], img1.shape[0]))
+        # Guard against template larger than source (shouldn't happen after resize)
+        if img2.shape[0] > img1.shape[0] or img2.shape[1] > img1.shape[1]:
+            return 0.0
         result = cv2.matchTemplate(img1, img2, cv2.TM_CCOEFF_NORMED)
         return float(result[0][0])

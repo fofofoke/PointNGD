@@ -110,7 +110,9 @@ DEFAULT_CONFIG = {
         "retry_delay": 2,
     },
     "ocr_retry_count": 3,
-    "error_screenshot_dir": "error_screenshots",
+    "error_screenshot_dir": "resources/screenshots",
+    "template_dir": "resources/templates",
+    "model_dir": "resources/models",
 }
 
 CONFIG_FILE = "config.json"

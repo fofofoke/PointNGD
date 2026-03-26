@@ -1276,8 +1276,16 @@ class AutomationEngine:
                 )
                 if found:
                     if odist <= target_tolerance:
-                        self._click(sx, sy)
-                        last_target_pos = (sx, sy)
+                        # If progress was recently detected (EXP going up),
+                        # click the original locked position to prevent
+                        # coordinate drift that causes false "target lost".
+                        recent_progress = (time.time() - last_progress_time
+                                           < stuck_timeout)
+                        if recent_progress:
+                            self._click(last_target_pos[0], last_target_pos[1])
+                        else:
+                            self._click(sx, sy)
+                            last_target_pos = (sx, sy)
                         scarecrow_clicked = True
                     else:
                         # Target moved beyond tolerance — don't click the wrong

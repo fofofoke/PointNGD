@@ -1279,11 +1279,14 @@ class AutomationEngine:
                     if dist <= target_tolerance:
                         self._click(sx, sy)
                         last_target_pos = (sx, sy)
+                        scarecrow_clicked = True
                     else:
-                        self._click(sx, sy)
-                        last_target_pos = (sx, sy)
-                        self._log("Target moved, switched to nearest scarecrow", "debug")
-                    scarecrow_clicked = True
+                        # Target moved beyond tolerance — don't click the wrong
+                        # scarecrow.  Reset lock so Phase B picks the closest
+                        # scarecrow relative to the character instead.
+                        last_target_pos = None
+                        self._log("Target lost (moved beyond tolerance), "
+                                  "falling back to character-based search", "debug")
                 else:
                     last_target_pos = None
                     self._log("Target lost, searching for new scarecrow...", "debug")

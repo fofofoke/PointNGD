@@ -311,7 +311,7 @@ class TestImageRecognition(unittest.TestCase):
         r = ImageRecognition()
         region = {"x": 0, "y": 0, "w": 100, "h": 100}
         # Should return early without trying to capture screen
-        found, x, y, conf, idx = r.find_scarecrow(region, [], None)
+        found, x, y, conf, idx, odist = r.find_scarecrow(region, [], None)
         self.assertFalse(found)
 
     def test_find_scarecrow_with_image_no_templates(self):
@@ -320,7 +320,7 @@ class TestImageRecognition(unittest.TestCase):
         r = ImageRecognition()
         region = {"x": 0, "y": 0, "w": 100, "h": 100}
         img = np.zeros((100, 100, 3), dtype=np.uint8)
-        found, x, y, conf, idx = r.find_scarecrow(region, [], None, image=img)
+        found, x, y, conf, idx, odist = r.find_scarecrow(region, [], None, image=img)
         self.assertFalse(found)
 
     def test_check_hp_bar_invalid_region(self):

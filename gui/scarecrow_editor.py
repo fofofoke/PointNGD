@@ -437,14 +437,14 @@ class ScarecrowEditor(tk.Toplevel):
         # Capture directly from target window (no need to hide editor)
         bgr_img = self._capture_roi_from_window(roi)
         if bgr_img is not None:
-            found, ax, ay, conf, idx = self.recognizer.find_scarecrow(
+            found, ax, ay, conf, idx, _odist = self.recognizer.find_scarecrow(
                 abs_roi, templates, hsv_range, image=bgr_img)
         else:
             # Fallback: hide editor and capture from screen
             self.withdraw()
             self.update()
             import time; time.sleep(0.3)
-            found, ax, ay, conf, idx = self.recognizer.find_scarecrow(
+            found, ax, ay, conf, idx, _odist = self.recognizer.find_scarecrow(
                 abs_roi, templates, hsv_range)
             self.deiconify()
 

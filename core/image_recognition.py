@@ -1,5 +1,6 @@
 """Image recognition engine: template matching, OCR, and screen capture."""
 import logging
+import math
 import os
 import sys
 
@@ -388,14 +389,17 @@ class ImageRecognition:
                    region is only used for coordinate math, not for capture.
 
         Returns:
-            (found, abs_x, abs_y, best_confidence, matched_template_index)
+            (found, abs_x, abs_y, best_confidence, matched_template_index,
+             origin_dist) where *origin_dist* is the Euclidean distance (in
+             logical/screen pixels) between the returned match and the origin.
+             When *found* is False, origin_dist is 0.
         """
         threshold = threshold or self.match_threshold
 
         # Fast path: nothing to search with
         valid_templates = [t for t in (templates or []) if t and os.path.exists(t)]
         if not valid_templates and not hsv_range:
-            return False, 0, 0, 0, -1
+            return False, 0, 0, 0, -1, 0
 
         screen = image if image is not None else self.capture_screen(region)
         sx, sy = self._dpi_scale(region, screen.shape)
@@ -471,7 +475,10 @@ class ImageRecognition:
             best = filtered[0]
             abs_x = region["x"] + round(best[0] * sx)
             abs_y = region["y"] + round(best[1] * sy)
-            return True, abs_x, abs_y, best[2], best[3]
+            # Distance in logical (screen) pixels for caller's tolerance check
+            origin_dist = math.hypot((best[0] - ox_cap) * sx,
+                                     (best[1] - oy_cap) * sy)
+            return True, abs_x, abs_y, best[2], best[3], origin_dist
 
         # Phase 3: Fallback - if templates fail, use HSV centroids sorted by distance
         if hsv_mask is not None:
@@ -479,10 +486,12 @@ class ImageRecognition:
             if found:
                 abs_x = region["x"] + round(cx * sx)
                 abs_y = region["y"] + round(cy * sy)
-                return True, abs_x, abs_y, 0.5, -1
+                origin_dist = math.hypot((cx - ox_cap) * sx,
+                                         (cy - oy_cap) * sy)
+                return True, abs_x, abs_y, 0.5, -1, origin_dist
 
         best_conf = max((m[2] for m in all_matches), default=0.0)
-        return False, 0, 0, best_conf, -1
+        return False, 0, 0, best_conf, -1, 0
 
     def _find_hsv_closest(self, mask, origin_x, origin_y, min_area=100):
         """Find the centroid of the contour closest to the origin point.

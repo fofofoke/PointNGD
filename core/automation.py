@@ -1270,13 +1270,12 @@ class AutomationEngine:
 
             # Target lock: try clicking last known target first
             if target_lock_enabled and last_target_pos and (scarecrow_templates or hsv_range):
-                found, sx, sy, conf, idx = self.recognizer.find_scarecrow(
+                found, sx, sy, conf, idx, odist = self.recognizer.find_scarecrow(
                     scarecrow_region, scarecrow_templates, hsv_range,
                     origin={"x": last_target_pos[0], "y": last_target_pos[1]},
                 )
                 if found:
-                    dist = abs(sx - last_target_pos[0]) + abs(sy - last_target_pos[1])
-                    if dist <= target_tolerance:
+                    if odist <= target_tolerance:
                         self._click(sx, sy)
                         last_target_pos = (sx, sy)
                         scarecrow_clicked = True
@@ -1285,7 +1284,8 @@ class AutomationEngine:
                         # scarecrow.  Reset lock so Phase B picks the closest
                         # scarecrow relative to the character instead.
                         last_target_pos = None
-                        self._log("Target lost (moved beyond tolerance), "
+                        self._log(f"Target lost (origin_dist={odist:.1f} > "
+                                  f"tolerance={target_tolerance}), "
                                   "falling back to character-based search", "debug")
                 else:
                     last_target_pos = None
@@ -1293,7 +1293,7 @@ class AutomationEngine:
 
             # No target lock hit — search for closest scarecrow
             if not scarecrow_clicked and (scarecrow_templates or hsv_range):
-                found, sx, sy, conf, idx = self.recognizer.find_scarecrow(
+                found, sx, sy, conf, idx, _odist = self.recognizer.find_scarecrow(
                     scarecrow_region, scarecrow_templates, hsv_range,
                     origin=origin,
                 )

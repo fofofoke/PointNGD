@@ -37,11 +37,15 @@ class TestConfig(unittest.TestCase):
         config = load_config(self.config_path)
         config["character_name"] = "TestKnight"
         config["scarecrow_click_delay"] = 1.5
+        config["step_retry"]["step_timeout"] = 12
+        config["error_alert"]["consecutive_errors"] = 5
         save_config(config, self.config_path)
 
         loaded = load_config(self.config_path)
         self.assertEqual(loaded["character_name"], "TestKnight")
         self.assertEqual(loaded["scarecrow_click_delay"], 1.5)
+        self.assertEqual(loaded["step_retry"]["step_timeout"], 12)
+        self.assertEqual(loaded["error_alert"]["consecutive_errors"], 5)
 
     def test_deep_merge_preserves_defaults(self):
         from core.config import load_config, save_config
@@ -121,6 +125,14 @@ class TestConfig(unittest.TestCase):
         for key in required_images:
             self.assertIn(key, DEFAULT_CONFIG["images"],
                           f"Missing image key: {key}")
+
+    def test_config_has_error_and_step_retry_controls(self):
+        from core.config import DEFAULT_CONFIG
+        self.assertIn("error_alert", DEFAULT_CONFIG)
+        self.assertIn("enabled", DEFAULT_CONFIG["error_alert"])
+        self.assertIn("consecutive_errors", DEFAULT_CONFIG["error_alert"])
+        self.assertIn("step_timeout", DEFAULT_CONFIG["step_retry"])
+        self.assertIn("recovery_wait", DEFAULT_CONFIG["step_retry"])
 
 
 class TestStats(unittest.TestCase):

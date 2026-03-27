@@ -357,6 +357,20 @@ class MainWindow:
         ttk.Entry(retry_row, textvariable=self.step_retry_var, width=8).pack(
             side=tk.LEFT, padx=5)
 
+        step_timeout_row = ttk.Frame(retry_frame)
+        step_timeout_row.pack(fill=tk.X, padx=10, pady=2)
+        ttk.Label(step_timeout_row, text="Step timeout (seconds):", width=25).pack(side=tk.LEFT)
+        self.step_timeout_var = tk.StringVar(value="10")
+        ttk.Entry(step_timeout_row, textvariable=self.step_timeout_var, width=8).pack(
+            side=tk.LEFT, padx=5)
+
+        recovery_wait_row = ttk.Frame(retry_frame)
+        recovery_wait_row.pack(fill=tk.X, padx=10, pady=2)
+        ttk.Label(recovery_wait_row, text="Recovery wait (seconds):", width=25).pack(side=tk.LEFT)
+        self.recovery_wait_var = tk.StringVar(value="3")
+        ttk.Entry(recovery_wait_row, textvariable=self.recovery_wait_var, width=8).pack(
+            side=tk.LEFT, padx=5)
+
         ocr_row = ttk.Frame(retry_frame)
         ocr_row.pack(fill=tk.X, padx=10, pady=2)
         ttk.Label(ocr_row, text="OCR retry count:", width=25).pack(side=tk.LEFT)
@@ -426,6 +440,18 @@ class MainWindow:
         ttk.Button(tg_frame, text="Test Connection", command=self._test_telegram).pack(
             anchor=tk.W, padx=10, pady=5
         )
+
+        tg_alert_row = ttk.Frame(tg_frame)
+        tg_alert_row.pack(fill=tk.X, padx=10, pady=(0, 5))
+        self.error_alert_enabled_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            tg_alert_row,
+            text="Alert on consecutive errors",
+            variable=self.error_alert_enabled_var,
+        ).pack(side=tk.LEFT)
+        ttk.Label(tg_alert_row, text="Count:", width=7).pack(side=tk.LEFT, padx=(15, 2))
+        self.error_alert_count_var = tk.StringVar(value="3")
+        ttk.Entry(tg_alert_row, textvariable=self.error_alert_count_var, width=6).pack(side=tk.LEFT)
 
         # Quick access buttons
         quick_frame = ttk.LabelFrame(scroll_frame, text="Quick Setup")
@@ -865,6 +891,8 @@ class MainWindow:
         self.config["step_retry"] = {
             "max_retries": self._safe_int(self.step_retry_var.get(), 3),
             "retry_delay": 2,
+            "step_timeout": self._safe_float(self.step_timeout_var.get(), 10),
+            "recovery_wait": self._safe_float(self.recovery_wait_var.get(), 3),
         }
         self.config["ocr_retry_count"] = self._safe_int(self.ocr_retry_var.get(), 3)
         self.config["strict_template_threshold"] = self._safe_float(
@@ -879,6 +907,10 @@ class MainWindow:
 
         self.config["telegram_bot_token"] = self.tg_token_var.get()
         self.config["telegram_chat_id"] = self.tg_chat_var.get()
+        self.config["error_alert"] = {
+            "enabled": self.error_alert_enabled_var.get(),
+            "consecutive_errors": self._safe_int(self.error_alert_count_var.get(), 3),
+        }
         try:
             self.config["scarecrow_click_delay"] = float(self.scarecrow_delay_var.get())
         except ValueError:
@@ -935,6 +967,8 @@ class MainWindow:
         # Error recovery
         step_retry = self.config.get("step_retry", {})
         self.step_retry_var.set(str(step_retry.get("max_retries", 3)))
+        self.step_timeout_var.set(str(step_retry.get("step_timeout", 10)))
+        self.recovery_wait_var.set(str(step_retry.get("recovery_wait", 3)))
         self.ocr_retry_var.set(str(self.config.get("ocr_retry_count", 3)))
         self.strict_threshold_var.set(str(self.config.get("strict_template_threshold", 0.9)))
 
@@ -948,6 +982,9 @@ class MainWindow:
 
         self.tg_token_var.set(self.config.get("telegram_bot_token", ""))
         self.tg_chat_var.set(self.config.get("telegram_chat_id", ""))
+        error_alert = self.config.get("error_alert", {})
+        self.error_alert_enabled_var.set(error_alert.get("enabled", True))
+        self.error_alert_count_var.set(str(error_alert.get("consecutive_errors", 3)))
         self.scarecrow_delay_var.set(str(self.config.get("scarecrow_click_delay", 0.5)))
         self.enter_wait_var.set(str(self.config.get("wait_after_enter_game", 5)))
         self.scarecrow_wait_var.set(str(self.config.get("wait_before_scarecrow", 3)))

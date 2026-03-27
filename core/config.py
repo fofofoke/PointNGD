@@ -108,6 +108,12 @@ DEFAULT_CONFIG = {
     "step_retry": {
         "max_retries": 3,
         "retry_delay": 2,
+        "step_timeout": 10,
+        "recovery_wait": 3,
+    },
+    "error_alert": {
+        "enabled": True,
+        "consecutive_errors": 3,
     },
     "ocr_retry_count": 3,
     "error_screenshot_dir": "resources/screenshots",

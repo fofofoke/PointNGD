@@ -1253,6 +1253,7 @@ class AutomationEngine:
         pending_final_decision = None  # "success" | "delete"
         pending_decision_streak = 0
         click_delay = self.config.get("scarecrow_click_delay", 0.5)
+        exp_check_interval = float(self.config.get("exp_check_interval", 0.0))
         strict_threshold = float(self.config.get("strict_template_threshold", 0.9))
         strict_threshold = min(0.99, max(0.5, strict_threshold))
 
@@ -1324,6 +1325,7 @@ class AutomationEngine:
 
         # Track progress for stuck detection
         last_progress_time = time.time()
+        last_exp_check_time = 0.0
         self._refresh_window()
         level_region = self._abs_roi(self.config["roi"]["level_display"])
         exp_region_cfg = self.config["roi"].get("exp_display") or self.config.get("exp_display")
@@ -1439,21 +1441,26 @@ class AutomationEngine:
                 self._sleep(click_delay)
 
             # --- Check for progress (level or EXP change) ---
-            cur_level, cur_exp_img = self._capture_progress_snapshot(
-                level_region, exp_region)
-            progress_detected = False
+            now = time.time()
+            if exp_check_interval <= 0 or (now - last_exp_check_time) >= exp_check_interval:
+                last_exp_check_time = now
+                cur_level, cur_exp_img = self._capture_progress_snapshot(
+                    level_region, exp_region)
+                progress_detected = False
 
-            if cur_level is not None and last_level is not None:
-                if cur_level > last_level:
-                    progress_detected = True
-            if cur_exp_img is not None and last_exp_img is not None:
-                if cur_exp_img != last_exp_img:
-                    progress_detected = True
+                if cur_level is not None and last_level is not None:
+                    if cur_level > last_level:
+                        progress_detected = True
+                if cur_exp_img is not None and last_exp_img is not None:
+                    if cur_exp_img != last_exp_img:
+                        progress_detected = True
 
-            if progress_detected:
-                last_progress_time = time.time()
-                last_level = cur_level
-                last_exp_img = cur_exp_img
+                if progress_detected:
+                    last_progress_time = now
+                    last_level = cur_level
+                    last_exp_img = cur_exp_img
+            else:
+                cur_level = last_level
 
             # OCR level tracking
             if cur_level is not None and cur_level > current_level:

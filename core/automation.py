@@ -1385,56 +1385,55 @@ class AutomationEngine:
             # --- Find and click scarecrow ---
             scarecrow_clicked = False
 
-            # Target lock: try clicking last known target first
-            if target_lock_enabled and last_target_pos and (scarecrow_templates or hsv_range):
-                found, sx, sy, conf, idx, odist = self.recognizer.find_scarecrow(
-                    scarecrow_region, scarecrow_templates, hsv_range,
-                    origin={"x": last_target_pos[0], "y": last_target_pos[1]},
-                )
-                if found:
-                    if odist <= target_tolerance:
-                        # If progress was recently detected (EXP going up),
-                        # click the original locked position to prevent
-                        # coordinate drift that causes false "target lost".
-                        recent_progress = (time.time() - last_progress_time
-                                           < stuck_timeout)
-                        if recent_progress:
-                            self._click(last_target_pos[0], last_target_pos[1])
-                        else:
+            # If EXP is actively progressing and we have a last target position,
+            # skip image detection entirely and keep clicking the same coordinates.
+            recent_progress = (time.time() - last_progress_time < stuck_timeout)
+            if recent_progress and last_target_pos:
+                self._click(last_target_pos[0], last_target_pos[1])
+                scarecrow_clicked = True
+            else:
+                # Target lock: try clicking last known target first
+                if target_lock_enabled and last_target_pos and (scarecrow_templates or hsv_range):
+                    found, sx, sy, conf, idx, odist = self.recognizer.find_scarecrow(
+                        scarecrow_region, scarecrow_templates, hsv_range,
+                        origin={"x": last_target_pos[0], "y": last_target_pos[1]},
+                    )
+                    if found:
+                        if odist <= target_tolerance:
                             self._click(sx, sy)
                             last_target_pos = (sx, sy)
-                        scarecrow_clicked = True
+                            scarecrow_clicked = True
+                        else:
+                            # Target moved beyond tolerance — don't click the wrong
+                            # scarecrow.  Reset lock so Phase B picks the closest
+                            # scarecrow relative to the character instead.
+                            last_target_pos = None
+                            self._log(f"Target lost (origin_dist={odist:.1f} > "
+                                      f"tolerance={target_tolerance}), "
+                                      "falling back to character-based search", "debug")
                     else:
-                        # Target moved beyond tolerance — don't click the wrong
-                        # scarecrow.  Reset lock so Phase B picks the closest
-                        # scarecrow relative to the character instead.
                         last_target_pos = None
-                        self._log(f"Target lost (origin_dist={odist:.1f} > "
-                                  f"tolerance={target_tolerance}), "
-                                  "falling back to character-based search", "debug")
-                else:
-                    last_target_pos = None
-                    self._log("Target lost, searching for new scarecrow...", "debug")
+                        self._log("Target lost, searching for new scarecrow...", "debug")
 
-            # No target lock hit — search for closest scarecrow
-            if not scarecrow_clicked and (scarecrow_templates or hsv_range):
-                found, sx, sy, conf, idx, _odist = self.recognizer.find_scarecrow(
-                    scarecrow_region, scarecrow_templates, hsv_range,
-                    origin=origin,
-                )
-                if found:
-                    self._click(sx, sy)
-                    last_target_pos = (sx, sy) if target_lock_enabled else None
-                    scarecrow_clicked = True
-                    if idx >= 0:
-                        self._log(f"Scarecrow clicked (template #{idx+1}, conf={conf:.2f})",
-                                  "debug")
+                # No target lock hit — search for closest scarecrow
+                if not scarecrow_clicked and (scarecrow_templates or hsv_range):
+                    found, sx, sy, conf, idx, _odist = self.recognizer.find_scarecrow(
+                        scarecrow_region, scarecrow_templates, hsv_range,
+                        origin=origin,
+                    )
+                    if found:
+                        self._click(sx, sy)
+                        last_target_pos = (sx, sy)  # Always save for next iteration
+                        scarecrow_clicked = True
+                        if idx >= 0:
+                            self._log(f"Scarecrow clicked (template #{idx+1}, conf={conf:.2f})",
+                                      "debug")
+                        else:
+                            self._log("Scarecrow clicked (HSV fallback)", "debug")
                     else:
-                        self._log("Scarecrow clicked (HSV fallback)", "debug")
-                else:
-                    self._log("Scarecrow not found, retrying...", "warning")
-                    self._sleep(1)
-                    continue
+                        self._log("Scarecrow not found, retrying...", "warning")
+                        self._sleep(1)
+                        continue
 
             if scarecrow_clicked:
                 self._sleep(click_delay)

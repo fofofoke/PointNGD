@@ -90,6 +90,7 @@ class TestConfig(unittest.TestCase):
         from core.config import DEFAULT_CONFIG
         required_rois = [
             "empty_slot", "knight_icon", "knight_verify", "confirm_button",
+            "post_confirm_verify",
             "item_slot", "popup_text", "scarecrow_search", "level_display",
             "mp_display", "exit_button", "delete_popup", "hp_display",
             "exp_display",
@@ -118,6 +119,7 @@ class TestConfig(unittest.TestCase):
         from core.config import DEFAULT_CONFIG
         required_images = [
             "empty_slot", "knight_icon", "knight_verify", "confirm_button",
+            "post_confirm_verify",
             "item_icon", "popup_text", "scarecrow", "exit_button",
             "delete_popup", "death_screen", "revival_button",
             "level_5", "mp_1", "mp_2", "mp_3", "mp_4", "mp_5", "mp_6", "mp_7", "mp_8",
@@ -818,6 +820,7 @@ class TestWorkflowIntegrity(unittest.TestCase):
         from core.config import DEFAULT_CONFIG
         required_images = [
             "empty_slot", "knight_icon", "knight_verify",
+            "post_confirm_verify",
             "confirm_button", "item_icon", "popup_text",
             "scarecrow", "exit_button", "delete_popup",
             "death_screen", "revival_button",
@@ -832,6 +835,7 @@ class TestWorkflowIntegrity(unittest.TestCase):
         from core.config import DEFAULT_CONFIG
         required_rois = [
             "empty_slot", "knight_icon", "knight_verify",
+            "post_confirm_verify",
             "confirm_button", "item_slot", "popup_text",
             "scarecrow_search", "level_display", "mp_display",
             "exit_button", "delete_popup",

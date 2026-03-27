@@ -925,10 +925,17 @@ class AutomationEngine:
             self.input.type_text(self.config.get("character_name", "Knight001"))
             self._sleep(0.5)
 
+        def _click_confirm_with_verify():
+            verify_enabled = bool(self.config["images"].get("post_confirm_verify", ""))
+            return self._step_find_and_click(
+                "confirm_button", "confirm_button", timeout=step_timeout,
+                verify_image_key="post_confirm_verify" if verify_enabled else None,
+                verify_region_key="post_confirm_verify" if verify_enabled else None,
+                verify_timeout=5,
+            )
+
         result = self._run_step_with_retry(
-            lambda: self._step_find_and_click(
-                "confirm_button", "confirm_button", timeout=step_timeout
-            ),
+            _click_confirm_with_verify,
             "find_confirm_button",
             recovery_func=_recover_to_step5)
         if result is None:

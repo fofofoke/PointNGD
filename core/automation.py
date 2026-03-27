@@ -940,7 +940,45 @@ class AutomationEngine:
             recovery_func=_recover_to_step5)
         if result is None:
             return "error"
-        self._sleep(2)
+
+        self._sleep(0.5)
+        # If next stage does not appear in time, press confirm once more.
+        # Next-stage marker: the knight icon (character creation screen)
+        # should disappear after successful confirm.
+        knight_template = self.config["images"].get("knight_icon", "")
+        if knight_template:
+            recheck_after = self._step_timeout
+            self._log(
+                f"Waiting up to {recheck_after}s for next stage after confirm..."
+            )
+            wait_end = time.time() + recheck_after
+            still_on_create = False
+            while time.time() < wait_end:
+                self._check_stop()
+                self._wait_pause()
+                self._refresh_window()
+                knight_roi = self._abs_roi(self.config["roi"].get("knight_icon"))
+                found_knight, _, _, _ = self.recognizer.find_template_in_region(
+                    knight_template,
+                    knight_roi,
+                    threshold=self._get_image_threshold("knight_icon"),
+                )
+                if not found_knight:
+                    still_on_create = False
+                    break
+                still_on_create = True
+                time.sleep(0.5)
+
+            if still_on_create:
+                self._log(
+                    f"Next stage not detected after {recheck_after}s. "
+                    "Clicking confirm button one more time...",
+                    "warning",
+                )
+                self._step_find_and_click(
+                    "confirm_button", "confirm_button", timeout=step_timeout
+                )
+        self._sleep(1.5)
 
         # Step 7: Double-click character to enter game
         self.current_step = 7

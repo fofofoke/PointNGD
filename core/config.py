@@ -20,6 +20,7 @@ DEFAULT_CONFIG = {
         "knight_icon": {"x": 0, "y": 0, "w": 100, "h": 100},
         "knight_verify": {"x": 0, "y": 0, "w": 100, "h": 100},
         "confirm_button": {"x": 0, "y": 0, "w": 100, "h": 100},
+        "post_confirm_verify": {"x": 0, "y": 0, "w": 100, "h": 100},
         "item_slot": {"x": 0, "y": 0, "w": 100, "h": 100},
         "popup_text": {"x": 0, "y": 0, "w": 100, "h": 100},
         "scarecrow_search": {"x": 0, "y": 0, "w": 400, "h": 400},
@@ -49,6 +50,7 @@ DEFAULT_CONFIG = {
         "knight_icon": "",
         "knight_verify": "",
         "confirm_button": "",
+        "post_confirm_verify": "",
         "item_icon": "",
         "popup_text": "",
         "scarecrow": "",
@@ -108,6 +110,12 @@ DEFAULT_CONFIG = {
     "step_retry": {
         "max_retries": 3,
         "retry_delay": 2,
+        "step_timeout": 10,
+        "recovery_wait": 3,
+    },
+    "error_alert": {
+        "enabled": True,
+        "consecutive_errors": 3,
     },
     "ocr_retry_count": 3,
     "error_screenshot_dir": "resources/screenshots",

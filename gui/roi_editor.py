@@ -39,6 +39,7 @@ class ROIEditor(tk.Toplevel):
         "knight_icon": "Knight Icon (Class Selection)",
         "knight_verify": "Knight Verify Area",
         "confirm_button": "Confirm Button",
+        "post_confirm_verify": "Post Confirm Verify (Next Step Marker)",
         "item_slot": "Item Slot (Inventory)",
         "popup_text": "Popup Text Area",
         "scarecrow_search": "Scarecrow Search Area",
@@ -64,6 +65,7 @@ class ROIEditor(tk.Toplevel):
     # ROI keys that correspond to an image template in config["images"]
     CAPTURABLE_ROIS = {
         "empty_slot", "knight_icon", "knight_verify", "confirm_button",
+        "post_confirm_verify",
         "item_slot", "popup_text", "scarecrow_search", "level_display",
         "mp_display", "exit_button", "delete_popup",
         "level_5", "mp_1", "mp_2", "mp_3", "mp_4", "mp_5", "mp_6", "mp_7", "mp_8",

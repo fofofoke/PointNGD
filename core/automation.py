@@ -140,6 +140,14 @@ class AutomationEngine:
         step_retry = config.get("step_retry", {})
         self._step_max_retries = step_retry.get("max_retries", 3)
         self._step_retry_delay = step_retry.get("retry_delay", 2)
+        self._step_timeout = step_retry.get("step_timeout", 10)
+        self._step_recovery_wait = step_retry.get("recovery_wait", 3)
+
+        # Consecutive error alert settings
+        err_alert = config.get("error_alert", {})
+        self._error_alert_enabled = err_alert.get("enabled", True)
+        self._error_alert_consecutive = max(1, int(err_alert.get("consecutive_errors", 3)))
+        self._consecutive_error_count = 0
 
     def _log(self, msg, level="info"):
         logger.log(getattr(logging, level.upper(), logging.INFO), msg)
@@ -628,6 +636,23 @@ class AutomationEngine:
             self._log(f"Failed to save error screenshot: {e}", "error")
             return None
 
+    def _save_mp9_screenshot(self):
+        """Save a screenshot when MP reaches exactly 9.
+
+        Saved under a dedicated sub-folder: <error_screenshot_dir>/screenshots.
+        """
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            shots_dir = os.path.join(self._error_ss_dir, "screenshots")
+            os.makedirs(shots_dir, exist_ok=True)
+            filepath = os.path.join(shots_dir, f"mp9_{timestamp}.png")
+            self.recognizer.save_region_as_template(None, filepath)
+            self._log(f"MP=9 screenshot saved: {filepath}")
+            return filepath
+        except Exception as e:
+            self._log(f"Failed to save MP=9 screenshot: {e}", "error")
+            return None
+
     def _run_step_with_retry(self, step_func, step_name, max_retries=None,
                              recovery_func=None, max_recovery=2):
         """Run a step function with retry logic.
@@ -654,9 +679,9 @@ class AutomationEngine:
             if recovery_func and recovery_count < max_recovery:
                 recovery_count += 1
                 self._log(f"Step '{step_name}' failed after {max_retries} attempts. "
-                          f"Waiting 3s and re-executing previous step "
+                          f"Waiting {self._step_recovery_wait}s and re-executing previous step "
                           f"(recovery {recovery_count}/{max_recovery})...", "warning")
-                self._sleep(3)
+                self._sleep(self._step_recovery_wait)
                 recovery_func()
                 self._sleep(1)
                 continue  # retry the step again
@@ -739,6 +764,7 @@ class AutomationEngine:
                           f"[{self.stats.elapsed_str()}] ===")
                 result = self._run_single_cycle()
                 if result == "success":
+                    self._consecutive_error_count = 0
                     self.state = self.STATE_SUCCESS
                     self.stats.record_success()
                     self._log("SUCCESS! MP 9 + HP 70s at Level 5 found!")
@@ -751,14 +777,35 @@ class AutomationEngine:
                     )
                     break
                 elif result == "delete_and_retry":
+                    self._consecutive_error_count = 0
                     self._log("Character doesn't meet criteria, deleting and retrying...")
                     continue
                 elif result == "error":
                     self.stats.record_error()
+                    self._consecutive_error_count += 1
+                    if (self._error_alert_enabled and
+                            self._consecutive_error_count >= self._error_alert_consecutive):
+                        self.telegram.send_message_async(
+                            "LC AB: Consecutive errors detected "
+                            f"({self._consecutive_error_count} cycles in a row). "
+                            "Please check bot status/logs."
+                        )
+                        self._log(
+                            f"Telegram alert sent: {self._consecutive_error_count} "
+                            "consecutive errors.",
+                            "warning",
+                        )
+                        self._log(
+                            "Consecutive error threshold reached. Stopping automation.",
+                            "error",
+                        )
+                        self.stop()
+                        break
                     self._log("Cycle ended with error, retrying...")
                     self._sleep(2)
                     continue
                 else:
+                    self._consecutive_error_count = 0
                     self._log(f"Cycle ended with result: {result}")
         except StopIteration:
             self._log("Automation stopped by user")
@@ -789,9 +836,19 @@ class AutomationEngine:
         # Step 1: Double-click empty slot and verify character creation screen
         self.current_step = 1
         self._log("Step 1: Finding empty slot...")
+        step_timeout = self._step_timeout
+
+        def _recover_to_step1():
+            self._log("Recovering to previous step: re-click empty slot...")
+            self._step_find_and_click(
+                "empty_slot", "empty_slot", double=True, timeout=step_timeout,
+                verify_image_key="knight_icon", verify_region_key="knight_icon",
+                verify_timeout=3,
+            )
+
         result = self._run_step_with_retry(
             lambda: self._step_find_and_click(
-                "empty_slot", "empty_slot", double=True, timeout=15,
+                "empty_slot", "empty_slot", double=True, timeout=step_timeout,
                 verify_image_key="knight_icon", verify_region_key="knight_icon",
                 verify_timeout=3,
             ),
@@ -803,8 +860,9 @@ class AutomationEngine:
         self.current_step = 2
         self._log("Step 2: Clicking knight icon...")
         result = self._run_step_with_retry(
-            lambda: self._step_find_and_click("knight_icon", "knight_icon", timeout=10),
-            "find_knight_icon")
+            lambda: self._step_find_and_click("knight_icon", "knight_icon", timeout=step_timeout),
+            "find_knight_icon",
+            recovery_func=_recover_to_step1)
         if result is None:
             return "error"
         self._sleep(1)
@@ -858,9 +916,28 @@ class AutomationEngine:
         # Step 6: Click confirm to create character
         self.current_step = 6
         self._log("Step 6: Confirming character creation...")
+        def _recover_to_step5():
+            self._log("Recovering to previous step: re-entering character name...")
+            self._refresh_window()
+            name_pos = self._abs_pos(self.config["click_positions"]["name_input_click"])
+            self._click(name_pos["x"], name_pos["y"])
+            self._sleep(0.3)
+            self.input.type_text(self.config.get("character_name", "Knight001"))
+            self._sleep(0.5)
+
+        def _click_confirm_with_verify():
+            verify_enabled = bool(self.config["images"].get("post_confirm_verify", ""))
+            return self._step_find_and_click(
+                "confirm_button", "confirm_button", timeout=step_timeout,
+                verify_image_key="post_confirm_verify" if verify_enabled else None,
+                verify_region_key="post_confirm_verify" if verify_enabled else None,
+                verify_timeout=5,
+            )
+
         result = self._run_step_with_retry(
-            lambda: self._step_find_and_click("confirm_button", "confirm_button", timeout=5),
-            "find_confirm_button")
+            _click_confirm_with_verify,
+            "find_confirm_button",
+            recovery_func=_recover_to_step5)
         if result is None:
             return "error"
         self._sleep(2)
@@ -903,7 +980,9 @@ class AutomationEngine:
         _press_tab()
         self._sleep(1)
         result = self._run_step_with_retry(
-            lambda: self._step_find_and_click("item_icon", "item_slot", double=True, timeout=10),
+            lambda: self._step_find_and_click(
+                "item_icon", "item_slot", double=True, timeout=step_timeout
+            ),
             "find_item_icon",
             recovery_func=_press_tab)
         if result is None:
@@ -916,10 +995,10 @@ class AutomationEngine:
 
         def _reclick_item():
             self._log("Re-clicking item icon as recovery...")
-            self._step_find_and_click("item_icon", "item_slot", double=True, timeout=10)
+            self._step_find_and_click("item_icon", "item_slot", double=True, timeout=step_timeout)
 
         result = self._run_step_with_retry(
-            lambda: self._step_find_and_click("popup_text", "popup_text", timeout=10),
+            lambda: self._step_find_and_click("popup_text", "popup_text", timeout=step_timeout),
             "find_popup_text",
             recovery_func=_reclick_item)
         if result is None:
@@ -1419,8 +1498,9 @@ class AutomationEngine:
                 pass_mp = actual_mp if actual_mp is not None else 9
                 self.stats.record_mp_pass(current_level, pass_mp, self.iteration_count)
 
-                # Take screenshot before HP check
-                self._save_error_screenshot("mp9_hp_check")
+                # Take screenshot only when MP is exactly 9.
+                if pass_mp == 9:
+                    self._save_mp9_screenshot()
 
                 # Check HP using template matching (hp_6 = first digit is 6)
                 hp_region = self._abs_roi(self.config["roi"]["hp_display"])

@@ -248,6 +248,26 @@ class MainWindow:
             setattr(self, var_name, var)
             ttk.Entry(row, textvariable=var, width=8).pack(side=tk.LEFT, padx=5)
 
+        exp_check_row = ttk.Frame(timing_frame)
+        exp_check_row.pack(fill=tk.X, padx=10, pady=2)
+        ttk.Label(exp_check_row, text="EXP Check Interval:", width=25).pack(side=tk.LEFT)
+        self.exp_check_interval_var = tk.StringVar(value="0")
+        ttk.Entry(exp_check_row, textvariable=self.exp_check_interval_var, width=8).pack(
+            side=tk.LEFT, padx=5)
+        ttk.Button(
+            exp_check_row, text="?", width=2,
+            command=lambda: messagebox.showinfo(
+                "EXP Check Interval 주의사항",
+                "EXP 측정 주기(초)를 설정합니다.\n\n"
+                "• 0 = 클릭마다 매번 측정 (기본값)\n"
+                "• 1.0 이상 = 해당 초마다 측정\n\n"
+                "⚠ 주의: 이 값은 반드시 Stuck Timeout(초)보다 작게 설정하세요.\n"
+                "예) Stuck Timeout이 10초이면 EXP Check Interval은 5초 이하 권장.\n\n"
+                "값이 Stuck Timeout 이상이면 EXP가 오르는 중에도\n"
+                "stuck 상태로 판단하여 타겟이 리셋될 수 있습니다.",
+            ),
+        ).pack(side=tk.LEFT, padx=2)
+
         # Stuck Detection
         stuck_frame = ttk.LabelFrame(scroll_frame, text="Stuck Detection (Path Blocked)")
         stuck_frame.pack(fill=tk.X, padx=10, pady=5)
@@ -927,6 +947,10 @@ class MainWindow:
             self.config["delete_wait_time"] = float(self.delete_wait_var.get())
         except ValueError:
             pass
+        try:
+            self.config["exp_check_interval"] = float(self.exp_check_interval_var.get())
+        except ValueError:
+            pass
 
     def _load_settings_to_ui(self):
         """Load config values into UI."""
@@ -989,6 +1013,7 @@ class MainWindow:
         self.enter_wait_var.set(str(self.config.get("wait_after_enter_game", 5)))
         self.scarecrow_wait_var.set(str(self.config.get("wait_before_scarecrow", 3)))
         self.delete_wait_var.set(str(self.config.get("delete_wait_time", 10)))
+        self.exp_check_interval_var.set(str(self.config.get("exp_check_interval", 0.0)))
 
     def _save_settings(self):
         self._apply_ui_to_config()

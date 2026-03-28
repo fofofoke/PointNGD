@@ -292,7 +292,7 @@ class AutomationEngine:
         the cursor is first moved and verified via _ensure_cursor_pos, then
         clicked in place so the verified position is not disturbed.
         """
-        self._focus_and_validate(x, y, skip_focus)
+        x, y = self._focus_and_validate(x, y, skip_focus)
         if self.input.handles_positioning and not self._hid_fallback_to_host_click:
             self.input.click(x, y)
             self._verify_hid_cursor(x, y)
@@ -303,7 +303,7 @@ class AutomationEngine:
 
     def _double_click(self, x, y, *, skip_focus=False):
         """Double-click at absolute screen coordinates (x, y)."""
-        self._focus_and_validate(x, y, skip_focus)
+        x, y = self._focus_and_validate(x, y, skip_focus)
         if self.input.handles_positioning and not self._hid_fallback_to_host_click:
             self.input.double_click(x, y)
             self._verify_hid_cursor(x, y)
@@ -465,17 +465,35 @@ class AutomationEngine:
                 return
 
     def _focus_and_validate(self, x, y, skip_focus):
-        """Shared logic for _click/_double_click."""
+        """Shared logic for _click/_double_click.
+        Returns (adjusted_x, adjusted_y) after compensating for any window
+        movement caused by the focus switch.
+        """
         if not skip_focus and self._target_window_id:
             _set_foreground_window(self._target_window_id)
             # Brief delay so the OS finishes the focus switch before we
             # send mouse events — without this the first click can be
             # swallowed by the window-activation itself.
             time.sleep(0.15)
-        # Warn if coordinates fall outside the known game window area
+        # Check current window position and compensate if it moved since
+        # the coordinates were computed (e.g. window manager repositioned
+        # the window during the focus switch above).
         if self._target_window_id:
             rect = get_window_rect(self._target_window_id)
             if rect:
+                dx = rect["x"] - self._win_offset_x
+                dy = rect["y"] - self._win_offset_y
+                if dx != 0 or dy != 0:
+                    self._log(
+                        f"Window moved by ({dx:+d},{dy:+d}) since last "
+                        f"refresh — adjusting click from ({x},{y}) to "
+                        f"({x + dx},{y + dy})",
+                        "warning",
+                    )
+                    self._win_offset_x = rect["x"]
+                    self._win_offset_y = rect["y"]
+                    x += dx
+                    y += dy
                 in_x = rect["x"] <= x <= rect["x"] + rect["w"]
                 in_y = rect["y"] <= y <= rect["y"] + rect["h"]
                 if not (in_x and in_y):
@@ -490,6 +508,7 @@ class AutomationEngine:
                         "Click (%d, %d) inside window (%d,%d %dx%d) OK",
                         x, y, rect["x"], rect["y"], rect["w"], rect["h"],
                     )
+        return x, y
 
     def _wait_and_find(self, image_key, region_key, timeout=10, interval=0.5):
         """Wait for a template image to appear in a region.
@@ -911,11 +930,7 @@ class AutomationEngine:
         self._sleep(0.3)
         char_name = self.config.get("character_name", "Knight001")
         self.input.type_text(char_name)
-        self._sleep(0.3)
-        # Click stat area to defocus the name input field so the next
-        # click on the confirm button is not consumed by the defocus.
-        self._click(stat_pos["x"], stat_pos["y"])
-        self._sleep(0.3)
+        self._sleep(0.5)
 
         # Step 6: Click confirm to create character
         self.current_step = 6
@@ -927,10 +942,7 @@ class AutomationEngine:
             self._click(name_pos["x"], name_pos["y"])
             self._sleep(0.3)
             self.input.type_text(self.config.get("character_name", "Knight001"))
-            self._sleep(0.3)
-            # Defocus the name input field
-            self._click(stat_pos["x"], stat_pos["y"])
-            self._sleep(0.3)
+            self._sleep(0.5)
 
         def _click_confirm_with_verify():
             verify_enabled = bool(self.config["images"].get("post_confirm_verify", ""))

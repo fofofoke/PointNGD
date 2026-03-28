@@ -1641,6 +1641,13 @@ class AutomationEngine:
                         self._log("Delete complete!")
                         break
                     self._sleep(0.5)
+            else:
+                # Popup not detected — wait as fallback to ensure deletion completes
+                self._log(
+                    "Delete popup not detected, waiting as fallback...",
+                    "warning",
+                )
+                self._sleep(delete_wait)
         else:
             # No delete popup image, just wait
             self._sleep(delete_wait)

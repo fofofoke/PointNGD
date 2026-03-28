@@ -245,6 +245,10 @@ class ROIEditor(tk.Toplevel):
             img_frame, text="Test Matching (Current ROI)",
             command=self._test_template_matching,
         ).pack(fill=tk.X, padx=5, pady=2)
+        ttk.Button(
+            img_frame, text="Test OCR (Current ROI)",
+            command=self._test_ocr,
+        ).pack(fill=tk.X, padx=5, pady=2)
 
         self.preview_canvas = tk.Canvas(img_frame, bg="gray30",
                                         height=80, width=280)
@@ -828,6 +832,97 @@ class ROIEditor(tk.Toplevel):
             self.status_var.set(
                 f"No match in '{self.current_roi_key}' (best conf={conf:.3f})"
             )
+
+    def _test_ocr(self):
+        """Test OCR reading for the currently selected ROI."""
+        if self.current_roi_key is None:
+            messagebox.showwarning("Warning", "Select a ROI from the list first")
+            return
+
+        effective = self._effective_roi_key(self.current_roi_key)
+        roi = self.config.get("roi", {}).get(effective, {})
+        if roi.get("w", 0) <= 5 or roi.get("h", 0) <= 5:
+            messagebox.showwarning("Warning", "ROI is too small. Set the ROI first.")
+            return
+
+        self._resolve_target_window()
+        if not self._window_id:
+            messagebox.showerror("Error", "Target window not found.")
+            return
+
+        img, _rect = capture_window(self._window_id)
+        if img is None:
+            messagebox.showerror("Error", "Failed to capture target window.")
+            return
+
+        import cv2
+        import numpy as np
+
+        cropped = img.crop((roi["x"], roi["y"],
+                            roi["x"] + roi["w"], roi["y"] + roi["h"]))
+        bgr = cv2.cvtColor(np.array(cropped), cv2.COLOR_RGB2BGR)
+        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+        _, thresh = cv2.threshold(gray, 0, 255,
+                                  cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+        results = {}
+
+        # Tesseract OCR
+        try:
+            import pytesseract
+            tess_text = pytesseract.image_to_string(
+                thresh,
+                config="--psm 7 --oem 3 -c tessedit_char_whitelist=0123456789",
+            ).strip()
+            tess_digits = "".join(c for c in tess_text if c.isdigit())
+            results["Tesseract"] = int(tess_digits) if tess_digits else None
+        except ImportError:
+            results["Tesseract"] = "(not installed)"
+        except Exception as e:
+            results["Tesseract"] = f"(error: {e})"
+
+        # EasyOCR
+        try:
+            import easyocr
+            reader = self.recognizer._get_easyocr_reader()
+            if reader is None:
+                reader = easyocr.Reader(['en'], gpu=False, verbose=False)
+                self.recognizer._easyocr_reader = reader
+            # Upscale small regions
+            h, w = thresh.shape[:2]
+            ocr_img = thresh
+            if w < 100 or h < 40:
+                scale = max(2, 80 // max(h, 1))
+                ocr_img = cv2.resize(thresh, (w * scale, h * scale),
+                                     interpolation=cv2.INTER_CUBIC)
+            easy_texts = reader.readtext(
+                ocr_img, allowlist='0123456789', detail=0, paragraph=False
+            )
+            easy_digits = "".join(
+                c for text in easy_texts for c in text if c.isdigit()
+            )
+            results["EasyOCR"] = int(easy_digits) if easy_digits else None
+        except ImportError:
+            results["EasyOCR"] = "(not installed)"
+        except Exception as e:
+            results["EasyOCR"] = f"(error: {e})"
+
+        # Build result message
+        lines = [
+            f"ROI: {self.current_roi_key}",
+            f"Region: x={roi['x']}, y={roi['y']}, "
+            f"w={roi['w']}, h={roi['h']}",
+            "",
+        ]
+        for engine, val in results.items():
+            lines.append(f"{engine}: {val}")
+
+        msg = "\n".join(lines)
+        messagebox.showinfo("OCR Test Result", msg)
+        self.status_var.set(
+            f"OCR test '{self.current_roi_key}': "
+            + ", ".join(f"{k}={v}" for k, v in results.items())
+        )
 
 
 # ======================================================================

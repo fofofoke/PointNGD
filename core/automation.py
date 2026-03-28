@@ -140,6 +140,9 @@ class AutomationEngine:
         hp_stop = config.get("hp_stop_condition", {})
         self._hp_stop_priority = hp_stop.get("priority", "image_first")
         self._hp_threshold = hp_stop.get("hp_threshold", 70)
+        self._hp_digits = hp_stop.get("hp_digits", 2)
+        self._hp_min = hp_stop.get("hp_min", 55)
+        self._hp_max = hp_stop.get("hp_max", 79)
 
         # Track whether EasyOCR fallback warning has been shown
         self._easyocr_fallback_warned = False
@@ -580,6 +583,53 @@ class AutomationEngine:
             if attempt < retries - 1:
                 time.sleep(0.3)
         return None
+
+    @staticmethod
+    def _correct_ocr_number(raw, expected_digits, valid_min, valid_max):
+        """Correct an OCR result using expected digit count and valid range.
+
+        Strategies:
+          1. If raw is already in range → return as-is.
+          2. If raw has more digits than expected → try all substrings of
+             expected length and pick one in range.
+          3. If nothing matches → return None (unrecoverable).
+        """
+        if raw is None:
+            return None
+        # Already valid
+        if valid_min <= raw <= valid_max:
+            return raw
+        # Too many digits — try substrings
+        s = str(raw)
+        if len(s) > expected_digits:
+            candidates = []
+            for i in range(len(s) - expected_digits + 1):
+                sub = int(s[i:i + expected_digits])
+                if valid_min <= sub <= valid_max:
+                    candidates.append(sub)
+            if len(candidates) == 1:
+                return candidates[0]
+            # Multiple candidates — can't decide reliably
+            if candidates:
+                return candidates[0]
+        return None
+
+    def _hp_ocr_with_correction(self, region):
+        """Read HP via OCR and apply range correction.
+
+        Returns (corrected_value, raw_value) tuple.
+        """
+        raw = self._easyocr_number_retry(region)
+        corrected = self._correct_ocr_number(
+            raw, self._hp_digits, self._hp_min, self._hp_max
+        )
+        if raw is not None and corrected != raw:
+            self._log(
+                f"HP OCR corrected: {raw} -> {corrected} "
+                f"(range {self._hp_min}~{self._hp_max}, "
+                f"{self._hp_digits} digits)", "debug"
+            )
+        return corrected, raw
 
     def _classify_mp_from_templates(self, mp_region, strict_threshold):
         """Classify MP when OCR failed twice using MP templates.
@@ -1647,13 +1697,18 @@ class AutomationEngine:
                 hp_region = self._abs_roi(hp_check_cfg)
             else:
                 hp_region = self._abs_roi(self.config["roi"]["hp_display"])
-            hp_ocr_val = self._easyocr_number_retry(hp_region)
+            hp_ocr_val, hp_raw = self._hp_ocr_with_correction(hp_region)
             if hp_ocr_val is not None:
-                self._log(f"Level {current_level}: HP EasyOCR={hp_ocr_val}")
+                self._log(f"Level {current_level}: HP={hp_ocr_val}"
+                          + (f" (raw: {hp_raw})" if hp_raw != hp_ocr_val else ""))
                 self.stats.record_hp_value(current_level, hp_ocr_val,
                                            self.iteration_count)
+            elif hp_raw is not None:
+                self._log(f"Level {current_level}: HP OCR raw={hp_raw} "
+                          f"out of range {self._hp_min}~{self._hp_max}.",
+                          "warning")
             else:
-                self._log(f"Level {current_level}: HP EasyOCR failed.",
+                self._log(f"Level {current_level}: HP OCR failed.",
                           "warning")
 
             if final_decision == "success":

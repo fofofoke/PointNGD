@@ -105,6 +105,9 @@ DEFAULT_CONFIG = {
     "hp_stop_condition": {
         "priority": "image_first",  # "image_first" or "ocr_first"
         "hp_threshold": 70,         # stop if HP OCR >= this value
+        "hp_digits": 2,             # expected digit count
+        "hp_min": 55,               # valid HP range minimum
+        "hp_max": 79,               # valid HP range maximum
     },
     "hotkeys": {
         "enabled": True,

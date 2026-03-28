@@ -387,10 +387,29 @@ class MainWindow:
         ttk.Entry(hp_thresh_row, textvariable=self.hp_threshold_var, width=8).pack(
             side=tk.LEFT, padx=5)
 
+        hp_range_row = ttk.Frame(hp_stop_frame)
+        hp_range_row.pack(fill=tk.X, padx=10, pady=2)
+        ttk.Label(hp_range_row, text="HP valid range:", width=25).pack(side=tk.LEFT)
+        self.hp_min_var = tk.StringVar(value="55")
+        ttk.Entry(hp_range_row, textvariable=self.hp_min_var, width=5).pack(
+            side=tk.LEFT, padx=2)
+        ttk.Label(hp_range_row, text="~").pack(side=tk.LEFT)
+        self.hp_max_var = tk.StringVar(value="79")
+        ttk.Entry(hp_range_row, textvariable=self.hp_max_var, width=5).pack(
+            side=tk.LEFT, padx=2)
+
+        hp_digits_row = ttk.Frame(hp_stop_frame)
+        hp_digits_row.pack(fill=tk.X, padx=10, pady=2)
+        ttk.Label(hp_digits_row, text="HP expected digits:", width=25).pack(
+            side=tk.LEFT)
+        self.hp_digits_var = tk.StringVar(value="2")
+        ttk.Entry(hp_digits_row, textvariable=self.hp_digits_var, width=5).pack(
+            side=tk.LEFT, padx=2)
+
         ttk.Label(hp_stop_frame,
                   text="image_first: template match (hp_6) decides, OCR cross-checks.\n"
                   "ocr_first: EasyOCR reads HP number, stop if >= threshold.\n"
-                  "HP value is always saved to stats for review.",
+                  "Valid range corrects misreads (e.g. 767 -> 67).",
                   foreground="gray").pack(anchor=tk.W, padx=10, pady=2)
 
         # EasyOCR install row
@@ -1003,6 +1022,9 @@ class MainWindow:
         self.config["hp_stop_condition"] = {
             "priority": self.hp_stop_priority_var.get(),
             "hp_threshold": self._safe_int(self.hp_threshold_var.get(), 70),
+            "hp_digits": self._safe_int(self.hp_digits_var.get(), 2),
+            "hp_min": self._safe_int(self.hp_min_var.get(), 55),
+            "hp_max": self._safe_int(self.hp_max_var.get(), 79),
         }
 
         self.config["step_retry"] = {
@@ -1089,6 +1111,9 @@ class MainWindow:
         hp_stop = self.config.get("hp_stop_condition", {})
         self.hp_stop_priority_var.set(hp_stop.get("priority", "image_first"))
         self.hp_threshold_var.set(str(hp_stop.get("hp_threshold", 70)))
+        self.hp_digits_var.set(str(hp_stop.get("hp_digits", 2)))
+        self.hp_min_var.set(str(hp_stop.get("hp_min", 55)))
+        self.hp_max_var.set(str(hp_stop.get("hp_max", 79)))
 
         # Error recovery
         step_retry = self.config.get("step_retry", {})

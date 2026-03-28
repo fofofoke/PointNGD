@@ -1641,6 +1641,21 @@ class AutomationEngine:
                 self._sleep(0.3)
                 continue
 
+            # --- Always read HP at level 5 for stats, regardless of MP result ---
+            hp_check_cfg = self.config["roi"].get("hp_check_display")
+            if hp_check_cfg and hp_check_cfg.get("w", 0) > 0:
+                hp_region = self._abs_roi(hp_check_cfg)
+            else:
+                hp_region = self._abs_roi(self.config["roi"]["hp_display"])
+            hp_ocr_val = self._easyocr_number_retry(hp_region)
+            if hp_ocr_val is not None:
+                self._log(f"Level {current_level}: HP EasyOCR={hp_ocr_val}")
+                self.stats.record_hp_value(current_level, hp_ocr_val,
+                                           self.iteration_count)
+            else:
+                self._log(f"Level {current_level}: HP EasyOCR failed.",
+                          "warning")
+
             if final_decision == "success":
                 pass_mp = actual_mp if actual_mp is not None else 9
                 self.stats.record_mp_pass(current_level, pass_mp, self.iteration_count)
@@ -1648,18 +1663,6 @@ class AutomationEngine:
                 # Take screenshot only when MP is exactly 9.
                 if pass_mp == 9:
                     self._save_mp9_screenshot()
-
-                # --- HP check at level 5: read HP via OCR and apply stop priority ---
-                hp_check_cfg = self.config["roi"].get("hp_check_display")
-                hp_region = self._abs_roi(hp_check_cfg) if hp_check_cfg else self._abs_roi(self.config["roi"]["hp_display"])
-                hp_ocr_val = self._easyocr_number_retry(hp_region)
-                if hp_ocr_val is not None:
-                    self._log(f"Level {current_level}: HP EasyOCR={hp_ocr_val}")
-                    self.stats.record_hp_value(current_level, hp_ocr_val,
-                                               self.iteration_count)
-                else:
-                    self._log(f"Level {current_level}: HP EasyOCR failed.",
-                              "warning")
 
                 hp_decision = self._check_hp_stop_condition(
                     hp_region, hp_ocr_val, strict_threshold

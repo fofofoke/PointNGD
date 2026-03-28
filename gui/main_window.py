@@ -366,6 +366,32 @@ class MainWindow:
                   "Set the HP Display ROI in ROI Editor for the HP bar area.",
                   foreground="gray").pack(anchor=tk.W, padx=10, pady=2)
 
+        # HP Stop Condition (cycle stop priority)
+        hp_stop_frame = ttk.LabelFrame(scroll_frame, text="HP Stop Condition (Level 5)")
+        hp_stop_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        self.hp_stop_priority_var = tk.StringVar(value="image_first")
+        ttk.Radiobutton(hp_stop_frame, text="Image match first, OCR cross-check",
+                        variable=self.hp_stop_priority_var,
+                        value="image_first").pack(anchor=tk.W, padx=20, pady=1)
+        ttk.Radiobutton(hp_stop_frame, text="OCR first (HP >= threshold = stop)",
+                        variable=self.hp_stop_priority_var,
+                        value="ocr_first").pack(anchor=tk.W, padx=20, pady=1)
+
+        hp_thresh_row = ttk.Frame(hp_stop_frame)
+        hp_thresh_row.pack(fill=tk.X, padx=10, pady=2)
+        ttk.Label(hp_thresh_row, text="HP threshold (stop if >=):", width=25).pack(
+            side=tk.LEFT)
+        self.hp_threshold_var = tk.StringVar(value="70")
+        ttk.Entry(hp_thresh_row, textvariable=self.hp_threshold_var, width=8).pack(
+            side=tk.LEFT, padx=5)
+
+        ttk.Label(hp_stop_frame,
+                  text="image_first: template match (hp_6) decides, OCR cross-checks.\n"
+                  "ocr_first: EasyOCR reads HP number, stop if >= threshold.\n"
+                  "HP value is always saved to stats for review.",
+                  foreground="gray").pack(anchor=tk.W, padx=10, pady=2)
+
         # Error Recovery
         retry_frame = ttk.LabelFrame(scroll_frame, text="Error Recovery")
         retry_frame.pack(fill=tk.X, padx=10, pady=5)
@@ -910,6 +936,11 @@ class MainWindow:
             "method": self.hp_method_var.get(),
         }
 
+        self.config["hp_stop_condition"] = {
+            "priority": self.hp_stop_priority_var.get(),
+            "hp_threshold": self._safe_int(self.hp_threshold_var.get(), 70),
+        }
+
         self.config["step_retry"] = {
             "max_retries": self._safe_int(self.step_retry_var.get(), 3),
             "retry_delay": 2,
@@ -989,6 +1020,11 @@ class MainWindow:
         hp_bar = self.config.get("hp_bar_detection", {})
         self.hp_bar_enabled_var.set(hp_bar.get("enabled", True))
         self.hp_method_var.set(hp_bar.get("method", "color"))
+
+        # HP stop condition
+        hp_stop = self.config.get("hp_stop_condition", {})
+        self.hp_stop_priority_var.set(hp_stop.get("priority", "image_first"))
+        self.hp_threshold_var.set(str(hp_stop.get("hp_threshold", 70)))
 
         # Error recovery
         step_retry = self.config.get("step_retry", {})

@@ -136,6 +136,11 @@ class AutomationEngine:
         # OCR retry count
         self._ocr_retries = config.get("ocr_retry_count", 3)
 
+        # HP stop condition settings
+        hp_stop = config.get("hp_stop_condition", {})
+        self._hp_stop_priority = hp_stop.get("priority", "image_first")
+        self._hp_threshold = hp_stop.get("hp_threshold", 70)
+
         # Step retry settings
         step_retry = config.get("step_retry", {})
         self._step_max_retries = step_retry.get("max_retries", 3)
@@ -551,6 +556,17 @@ class AutomationEngine:
                 time.sleep(0.3)
         return None
 
+    def _easyocr_number_retry(self, region, retries=None):
+        """OCR a number using EasyOCR with retries. Returns int or None."""
+        retries = retries if retries is not None else self._ocr_retries
+        for attempt in range(retries):
+            result = self.recognizer.easyocr_number(region)
+            if result is not None:
+                return result
+            if attempt < retries - 1:
+                time.sleep(0.3)
+        return None
+
     def _classify_mp_from_templates(self, mp_region, strict_threshold):
         """Classify MP when OCR failed twice using MP templates.
 
@@ -622,6 +638,49 @@ class AutomationEngine:
                 "warning",
             )
         return "success"
+
+    def _check_hp_stop_condition(self, hp_region, hp_ocr_val, strict_threshold):
+        """Check HP stop condition based on configured priority.
+
+        Priority modes:
+          - "image_first": try image template match first, OCR fallback
+          - "ocr_first": if HP OCR >= threshold → success (stop), else delete
+
+        Returns "success" or "delete".
+        """
+        if self._hp_stop_priority == "ocr_first":
+            # OCR-based: HP >= threshold means success
+            if hp_ocr_val is not None:
+                if hp_ocr_val >= self._hp_threshold:
+                    self._log(
+                        f"HP OCR={hp_ocr_val} >= {self._hp_threshold}. "
+                        f"HP check passed (ocr_first)."
+                    )
+                    return "success"
+                self._log(
+                    f"HP OCR={hp_ocr_val} < {self._hp_threshold}. "
+                    f"Deleting (ocr_first).", "warning"
+                )
+                return "delete"
+            # OCR failed — fall back to image template
+            self._log("HP OCR failed, falling back to image template.", "warning")
+            return self._classify_hp_from_templates(hp_region, strict_threshold)
+        else:
+            # image_first (default): try template match first
+            image_result = self._classify_hp_from_templates(
+                hp_region, strict_threshold
+            )
+            if image_result == "delete":
+                return "delete"
+            # Image says success — optionally cross-check with OCR
+            if hp_ocr_val is not None and hp_ocr_val < self._hp_threshold:
+                self._log(
+                    f"Image template OK but HP OCR={hp_ocr_val} < "
+                    f"{self._hp_threshold}. Deleting (image_first cross-check).",
+                    "warning",
+                )
+                return "delete"
+            return "success"
 
     def _save_error_screenshot(self, step_name):
         """Save a screenshot when an error occurs for debugging."""
@@ -1499,29 +1558,50 @@ class AutomationEngine:
                 continue
 
             required_mp = 9
-            actual_mp = self._ocr_number_retry(mp_region)
             final_decision = None
             low_mp_value = None
+            actual_mp = None
 
-            if actual_mp is None:
-                self._log(f"Level {current_level}: MP OCR failed! "
-                          "Retrying after short delay...", "warning")
-                self._sleep(0.5)
-                actual_mp = self._ocr_number_retry(mp_region)
+            # --- MP judgment: template matching FIRST, EasyOCR fallback ---
+            tmpl_decision, tmpl_mp_val, tmpl_log = self._classify_mp_from_templates(
+                mp_region, strict_threshold
+            )
 
-            if actual_mp is not None:
-                self._log(f"Level {current_level}: MP OCR={actual_mp} (need {required_mp})")
-                if actual_mp >= required_mp:
-                    final_decision = "success"
-                else:
-                    final_decision = "delete"
-                    low_mp_value = actual_mp
+            if tmpl_decision == "delete" and tmpl_mp_val is not None:
+                # Template clearly matched a low MP value
+                self._log(f"Level {current_level}: {tmpl_log}")
+                final_decision = "delete"
+                low_mp_value = tmpl_mp_val
+                actual_mp = tmpl_mp_val
             else:
-                # OCR failed twice: use MP template fallback.
-                final_decision, low_mp_value, mp_log = self._classify_mp_from_templates(
-                    mp_region, strict_threshold
+                # Template inconclusive — use EasyOCR as fallback
+                self._log(
+                    f"Level {current_level}: MP template inconclusive "
+                    f"({tmpl_log}). Trying EasyOCR...", "debug"
                 )
-                self._log(mp_log, "warning")
+                actual_mp = self._easyocr_number_retry(mp_region)
+
+                if actual_mp is None:
+                    self._log(f"Level {current_level}: EasyOCR failed! "
+                              "Retrying after short delay...", "warning")
+                    self._sleep(0.5)
+                    actual_mp = self._easyocr_number_retry(mp_region)
+
+                if actual_mp is not None:
+                    self._log(f"Level {current_level}: MP EasyOCR={actual_mp} "
+                              f"(need {required_mp})")
+                    if actual_mp >= required_mp:
+                        final_decision = "success"
+                    else:
+                        final_decision = "delete"
+                        low_mp_value = actual_mp
+                else:
+                    # Both template and EasyOCR failed — treat as success
+                    self._log(
+                        f"Level {current_level}: MP template and EasyOCR both "
+                        f"failed. Treating as MP>=9.", "warning"
+                    )
+                    final_decision = "success"
 
             # Confirm identical decision for 2 consecutive frames.
             if final_decision == pending_final_decision:
@@ -1547,20 +1627,30 @@ class AutomationEngine:
                 if pass_mp == 9:
                     self._save_mp9_screenshot()
 
-                # Check HP using template matching (hp_6 = first digit is 6)
+                # --- HP check at level 5: read HP via OCR and apply stop priority ---
                 hp_region = self._abs_roi(self.config["roi"]["hp_display"])
-                hp_decision = self._classify_hp_from_templates(
-                    hp_region, strict_threshold
+                hp_ocr_val = self._easyocr_number_retry(hp_region)
+                if hp_ocr_val is not None:
+                    self._log(f"Level {current_level}: HP EasyOCR={hp_ocr_val}")
+                    self.stats.record_hp_value(current_level, hp_ocr_val,
+                                               self.iteration_count)
+                else:
+                    self._log(f"Level {current_level}: HP EasyOCR failed.",
+                              "warning")
+
+                hp_decision = self._check_hp_stop_condition(
+                    hp_region, hp_ocr_val, strict_threshold
                 )
 
                 if hp_decision == "delete":
                     self._log(
-                        f"MP={pass_mp} OK but HP is 60s. Deleting character."
+                        f"MP={pass_mp} OK but HP check failed. "
+                        f"Deleting character."
                     )
                     self._exit_and_delete()
                     return "delete_and_retry"
 
-                self._log(f"MP={pass_mp} OK and HP is 70s. Success!")
+                self._log(f"MP={pass_mp} OK and HP passed. Success!")
                 return "success"
 
             fail_mp = low_mp_value if low_mp_value is not None else (actual_mp or 0)

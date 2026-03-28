@@ -34,6 +34,11 @@ try:
 except ImportError:
     pytesseract = None
 
+try:
+    import easyocr
+except ImportError:
+    easyocr = None
+
 
 if cv2 is None and np is not None:
     class _Cv2Fallback:
@@ -139,6 +144,8 @@ class ImageRecognition:
         # Set by AutomationEngine at start based on config["capture_dpi_scale"].
         self._template_dpi_ratio = 1.0
         self._resized_cache: dict[str, "np.ndarray"] = {}
+        # Lazy-init EasyOCR reader (heavy on first load)
+        self._easyocr_reader = None
 
     def set_template_dpi_ratio(self, capture_scale: float, runtime_scale: float):
         """Configure the DPI ratio used to auto-resize templates.
@@ -359,6 +366,38 @@ class ImageRecognition:
         """OCR a region and extract a number. Returns int or None."""
         text = self.ocr_region(region, config="--psm 7 --oem 3 -c tessedit_char_whitelist=0123456789")
         digits = "".join(c for c in text if c.isdigit())
+        if digits:
+            return int(digits)
+        return None
+
+    def _get_easyocr_reader(self):
+        """Lazy-initialize and return the EasyOCR reader."""
+        if self._easyocr_reader is None:
+            if easyocr is None:
+                return None
+            self._easyocr_reader = easyocr.Reader(
+                ['en'], gpu=False, verbose=False
+            )
+        return self._easyocr_reader
+
+    def easyocr_number(self, region):
+        """OCR a region using EasyOCR and extract a number. Returns int or None."""
+        reader = self._get_easyocr_reader()
+        if reader is None:
+            return None
+        screen = self.capture_screen(region)
+        gray = cv2.cvtColor(screen, cv2.COLOR_BGR2GRAY)
+        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        # Upscale small regions for better recognition
+        h, w = thresh.shape[:2]
+        if w < 100 or h < 40:
+            scale = max(2, 80 // max(h, 1))
+            thresh = cv2.resize(thresh, (w * scale, h * scale),
+                                interpolation=cv2.INTER_CUBIC)
+        results = reader.readtext(
+            thresh, allowlist='0123456789', detail=0, paragraph=False
+        )
+        digits = "".join(c for text in results for c in text if c.isdigit())
         if digits:
             return int(digits)
         return None

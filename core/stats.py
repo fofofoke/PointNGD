@@ -19,6 +19,7 @@ class StatsTracker:
         self.deaths = 0
         self.stuck_count = 0
         self.mp_history = []  # list of {level, mp, iteration}
+        self.hp_history = []  # list of {level, hp, iteration}
         self.level_times = []  # list of {level, time_seconds, iteration}
         self.cycle_times = []  # list of completed cycle durations in seconds
         self._cycle_start_time = None  # start time of current cycle
@@ -64,6 +65,11 @@ class StatsTracker:
             "result": "pass",
         })
 
+    def record_hp_value(self, level, hp, iteration):
+        self.hp_history.append({
+            "level": level, "hp": hp, "iteration": iteration,
+        })
+
     def record_error(self):
         self.errors += 1
 
@@ -106,6 +112,17 @@ class StatsTracker:
             dist[lv][mp] = dist[lv].get(mp, 0) + 1
         return dist
 
+    def hp_distribution(self):
+        """Get HP distribution per level. Returns dict {level: {hp_value: count}}."""
+        dist = {}
+        for entry in self.hp_history:
+            lv = entry["level"]
+            hp = entry["hp"]
+            if lv not in dist:
+                dist[lv] = {}
+            dist[lv][hp] = dist[lv].get(hp, 0) + 1
+        return dist
+
     def summary_text(self):
         """Generate a human-readable summary."""
         lines = [
@@ -135,6 +152,18 @@ class StatsTracker:
             for lv in sorted(dist.keys()):
                 mp_counts = dist[lv]
                 parts = [f"MP={mp}:{count}" for mp, count in sorted(mp_counts.items())]
+                lines.append(f"  Level {lv}: {', '.join(parts)}")
+            lines.append("")
+
+        # HP distribution
+        hp_dist = self.hp_distribution()
+        if hp_dist:
+            lines.append("-" * 50)
+            lines.append("  HP Distribution by Level:")
+            lines.append("-" * 50)
+            for lv in sorted(hp_dist.keys()):
+                hp_counts = hp_dist[lv]
+                parts = [f"HP={hp}:{count}" for hp, count in sorted(hp_counts.items())]
                 lines.append(f"  Level {lv}: {', '.join(parts)}")
             lines.append("")
 

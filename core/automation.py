@@ -141,6 +141,9 @@ class AutomationEngine:
         self._hp_stop_priority = hp_stop.get("priority", "image_first")
         self._hp_threshold = hp_stop.get("hp_threshold", 70)
 
+        # Track whether EasyOCR fallback warning has been shown
+        self._easyocr_fallback_warned = False
+
         # Step retry settings
         step_retry = config.get("step_retry", {})
         self._step_max_retries = step_retry.get("max_retries", 3)
@@ -557,8 +560,19 @@ class AutomationEngine:
         return None
 
     def _easyocr_number_retry(self, region, retries=None):
-        """OCR a number using EasyOCR with retries. Returns int or None."""
+        """OCR a number using EasyOCR with retries.
+
+        Falls back to pytesseract if easyocr is not installed.
+        Returns int or None.
+        """
         retries = retries if retries is not None else self._ocr_retries
+        # Check if EasyOCR is available; if not, fall back to pytesseract
+        if self.recognizer._get_easyocr_reader() is None:
+            if not self._easyocr_fallback_warned:
+                self._log("EasyOCR not available, falling back to pytesseract.",
+                          "warning")
+                self._easyocr_fallback_warned = True
+            return self._ocr_number_retry(region, retries)
         for attempt in range(retries):
             result = self.recognizer.easyocr_number(region)
             if result is not None:

@@ -763,6 +763,7 @@ class AutomationEngine:
                 self._log(f"=== Iteration {self.iteration_count} "
                           f"[{self.stats.elapsed_str()}] ===")
                 result = self._run_single_cycle()
+                self.stats.record_cycle_end()
                 if result == "success":
                     self._consecutive_error_count = 0
                     self.state = self.STATE_SUCCESS

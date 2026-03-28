@@ -911,7 +911,11 @@ class AutomationEngine:
         self._sleep(0.3)
         char_name = self.config.get("character_name", "Knight001")
         self.input.type_text(char_name)
-        self._sleep(0.5)
+        self._sleep(0.3)
+        # Click stat area to defocus the name input field so the next
+        # click on the confirm button is not consumed by the defocus.
+        self._click(stat_pos["x"], stat_pos["y"])
+        self._sleep(0.3)
 
         # Step 6: Click confirm to create character
         self.current_step = 6
@@ -922,11 +926,11 @@ class AutomationEngine:
             name_pos = self._abs_pos(self.config["click_positions"]["name_input_click"])
             self._click(name_pos["x"], name_pos["y"])
             self._sleep(0.3)
-            # Select all existing text before retyping to avoid duplicate names
-            self.input.hotkey("ctrl", "a")
-            self._sleep(0.1)
             self.input.type_text(self.config.get("character_name", "Knight001"))
-            self._sleep(0.5)
+            self._sleep(0.3)
+            # Defocus the name input field
+            self._click(stat_pos["x"], stat_pos["y"])
+            self._sleep(0.3)
 
         def _click_confirm_with_verify():
             verify_enabled = bool(self.config["images"].get("post_confirm_verify", ""))

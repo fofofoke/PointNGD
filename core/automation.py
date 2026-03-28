@@ -1642,7 +1642,8 @@ class AutomationEngine:
                     self._save_mp9_screenshot()
 
                 # --- HP check at level 5: read HP via OCR and apply stop priority ---
-                hp_region = self._abs_roi(self.config["roi"]["hp_display"])
+                hp_check_cfg = self.config["roi"].get("hp_check_display")
+                hp_region = self._abs_roi(hp_check_cfg) if hp_check_cfg else self._abs_roi(self.config["roi"]["hp_display"])
                 hp_ocr_val = self._easyocr_number_retry(hp_region)
                 if hp_ocr_val is not None:
                     self._log(f"Level {current_level}: HP EasyOCR={hp_ocr_val}")

@@ -674,6 +674,15 @@ class MainWindow:
         else:
             self.stats_text.insert(tk.END, "No MP data yet.\n")
 
+        # HP distribution
+        hp_dist = s.hp_distribution()
+        if hp_dist:
+            self.stats_text.insert(tk.END, "\n--- HP Distribution ---\n")
+            for lv in sorted(hp_dist.keys()):
+                hp_counts = hp_dist[lv]
+                parts = [f"HP={hp}: {count}" for hp, count in sorted(hp_counts.items())]
+                self.stats_text.insert(tk.END, f"Level {lv}: {', '.join(parts)}\n")
+
         # Recent level-ups
         if s.level_times:
             self.stats_text.insert(tk.END, "\n--- Recent Level-Ups ---\n")

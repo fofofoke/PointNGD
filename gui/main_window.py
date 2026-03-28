@@ -1,6 +1,7 @@
 """Main GUI window for LC AB."""
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext, simpledialog, filedialog
+import sys
 import threading
 import logging
 import os
@@ -365,6 +366,42 @@ class MainWindow:
                   text="Color mode detects HP bar red pixels. More reliable than OCR.\n"
                   "Set the HP Display ROI in ROI Editor for the HP bar area.",
                   foreground="gray").pack(anchor=tk.W, padx=10, pady=2)
+
+        # HP Stop Condition (cycle stop priority)
+        hp_stop_frame = ttk.LabelFrame(scroll_frame, text="HP Stop Condition (Level 5)")
+        hp_stop_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        self.hp_stop_priority_var = tk.StringVar(value="image_first")
+        ttk.Radiobutton(hp_stop_frame, text="Image match first, OCR cross-check",
+                        variable=self.hp_stop_priority_var,
+                        value="image_first").pack(anchor=tk.W, padx=20, pady=1)
+        ttk.Radiobutton(hp_stop_frame, text="OCR first (HP >= threshold = stop)",
+                        variable=self.hp_stop_priority_var,
+                        value="ocr_first").pack(anchor=tk.W, padx=20, pady=1)
+
+        hp_thresh_row = ttk.Frame(hp_stop_frame)
+        hp_thresh_row.pack(fill=tk.X, padx=10, pady=2)
+        ttk.Label(hp_thresh_row, text="HP threshold (stop if >=):", width=25).pack(
+            side=tk.LEFT)
+        self.hp_threshold_var = tk.StringVar(value="70")
+        ttk.Entry(hp_thresh_row, textvariable=self.hp_threshold_var, width=8).pack(
+            side=tk.LEFT, padx=5)
+
+        ttk.Label(hp_stop_frame,
+                  text="image_first: template match (hp_6) decides, OCR cross-checks.\n"
+                  "ocr_first: EasyOCR reads HP number, stop if >= threshold.\n"
+                  "HP value is always saved to stats for review.",
+                  foreground="gray").pack(anchor=tk.W, padx=10, pady=2)
+
+        # EasyOCR install row
+        easyocr_row = ttk.Frame(hp_stop_frame)
+        easyocr_row.pack(fill=tk.X, padx=10, pady=4)
+        self._easyocr_status_var = tk.StringVar()
+        self._update_easyocr_status()
+        ttk.Label(easyocr_row, textvariable=self._easyocr_status_var).pack(
+            side=tk.LEFT)
+        ttk.Button(easyocr_row, text="Install EasyOCR",
+                   command=self._install_easyocr).pack(side=tk.LEFT, padx=8)
 
         # Error Recovery
         retry_frame = ttk.LabelFrame(scroll_frame, text="Error Recovery")
@@ -849,6 +886,50 @@ class MainWindow:
     def _toggle_arduino(self):
         pass  # Arduino frame is always visible
 
+    def _update_easyocr_status(self):
+        """Update the EasyOCR installation status label."""
+        try:
+            import easyocr  # noqa: F401
+            self._easyocr_status_var.set("EasyOCR: Installed")
+        except ImportError:
+            self._easyocr_status_var.set("EasyOCR: Not installed")
+
+    def _install_easyocr(self):
+        """Install EasyOCR via pip in a background thread."""
+        self._easyocr_status_var.set("EasyOCR: Installing...")
+        self.status_var.set("Installing EasyOCR (this may take a few minutes)...")
+
+        def _run():
+            import subprocess
+            try:
+                result = subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "easyocr"],
+                    capture_output=True, text=True, timeout=600,
+                )
+                if result.returncode == 0:
+                    self.root.after(0, self._on_easyocr_installed, True, "")
+                else:
+                    self.root.after(0, self._on_easyocr_installed, False,
+                                   result.stderr.strip())
+            except Exception as e:
+                self.root.after(0, self._on_easyocr_installed, False, str(e))
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _on_easyocr_installed(self, success, error_msg):
+        """Callback after EasyOCR install attempt."""
+        if success:
+            self._easyocr_status_var.set("EasyOCR: Installed")
+            self.status_var.set("EasyOCR installed successfully!")
+            messagebox.showinfo("EasyOCR", "EasyOCR installed successfully!")
+        else:
+            self._easyocr_status_var.set("EasyOCR: Install failed")
+            self.status_var.set("EasyOCR installation failed.")
+            messagebox.showerror(
+                "EasyOCR",
+                f"Installation failed:\n{error_msg[:500]}"
+            )
+
     @staticmethod
     def _safe_int(value, default):
         """Parse int from string, returning default on failure."""
@@ -908,6 +989,11 @@ class MainWindow:
         self.config["hp_bar_detection"] = {
             "enabled": self.hp_bar_enabled_var.get(),
             "method": self.hp_method_var.get(),
+        }
+
+        self.config["hp_stop_condition"] = {
+            "priority": self.hp_stop_priority_var.get(),
+            "hp_threshold": self._safe_int(self.hp_threshold_var.get(), 70),
         }
 
         self.config["step_retry"] = {
@@ -989,6 +1075,11 @@ class MainWindow:
         hp_bar = self.config.get("hp_bar_detection", {})
         self.hp_bar_enabled_var.set(hp_bar.get("enabled", True))
         self.hp_method_var.set(hp_bar.get("method", "color"))
+
+        # HP stop condition
+        hp_stop = self.config.get("hp_stop_condition", {})
+        self.hp_stop_priority_var.set(hp_stop.get("priority", "image_first"))
+        self.hp_threshold_var.set(str(hp_stop.get("hp_threshold", 70)))
 
         # Error recovery
         step_retry = self.config.get("step_retry", {})

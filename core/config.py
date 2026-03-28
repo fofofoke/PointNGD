@@ -100,6 +100,10 @@ DEFAULT_CONFIG = {
         "enabled": True,
         "method": "color",  # "color" or "ocr"
     },
+    "hp_stop_condition": {
+        "priority": "image_first",  # "image_first" or "ocr_first"
+        "hp_threshold": 70,         # stop if HP OCR >= this value
+    },
     "hotkeys": {
         "enabled": True,
     },

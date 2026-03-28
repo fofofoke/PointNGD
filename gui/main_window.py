@@ -581,6 +581,7 @@ class MainWindow:
             ("Deaths:", "deaths", "0"),
             ("Stuck Count:", "stuck", "0"),
             ("Success Rate:", "rate", "0.0%"),
+            ("Avg Cycle Time:", "avg_cycle", "-"),
         ]
         for i, (label, key, default) in enumerate(stat_items):
             ttk.Label(info_frame, text=label, font=("", 10, "bold")).grid(
@@ -622,6 +623,7 @@ class MainWindow:
         self.stats_vars["deaths"].set(str(s.deaths))
         self.stats_vars["stuck"].set(str(s.stuck_count))
         self.stats_vars["rate"].set(f"{s.success_rate():.1f}%")
+        self.stats_vars["avg_cycle"].set(s.avg_cycle_time_str())
 
         # Update MP distribution text
         self.stats_text.config(state=tk.NORMAL)

@@ -20,12 +20,31 @@ class StatsTracker:
         self.stuck_count = 0
         self.mp_history = []  # list of {level, mp, iteration}
         self.level_times = []  # list of {level, time_seconds, iteration}
+        self.cycle_times = []  # list of completed cycle durations in seconds
+        self._cycle_start_time = None  # start time of current cycle
 
     def start(self):
         self.start_time = time.time()
 
     def record_iteration(self):
         self.total_iterations += 1
+        self._cycle_start_time = time.time()
+
+    def record_cycle_end(self):
+        """Record the end of a completed cycle and store its duration."""
+        if self._cycle_start_time is not None:
+            duration = time.time() - self._cycle_start_time
+            self.cycle_times.append(duration)
+            self._cycle_start_time = None
+
+    def avg_cycle_time_str(self):
+        """Return average cycle time as 'Xm Ys' string, excluding current cycle."""
+        if not self.cycle_times:
+            return "-"
+        avg = sum(self.cycle_times) / len(self.cycle_times)
+        minutes = int(avg) // 60
+        seconds = int(avg) % 60
+        return f"{minutes}m {seconds:02d}s"
 
     def record_success(self):
         self.successful += 1
@@ -103,6 +122,7 @@ class StatsTracker:
             f"  Deaths           : {self.deaths}",
             f"  Stuck Count      : {self.stuck_count}",
             f"  Success Rate     : {self.success_rate():.1f}%",
+            f"  Avg Cycle Time   : {self.avg_cycle_time_str()}",
             "",
         ]
 

@@ -58,8 +58,8 @@ class ROIEditor(tk.Toplevel):
         "delete_popup": "Delete Popup Area",
         "exp_display": "EXP Display Area (Stuck Detection)",
         "hp_display": "HP Display Area (Death Detection)",
-        "hp_check_display": "HP Check Area (Level 5 Final HP)",
-        "hp_6": "HP 6x Template (uses HP Check Display ROI)",
+        "hp_check_display": "HP Check Area (Level 5 Final HP OCR)",
+        "hp_6": "HP 6x Template (tens digit only)",
         "game_entered": "Game Entered Screen (Post-Login Verify)",
     }
 
@@ -87,7 +87,6 @@ class ROIEditor(tk.Toplevel):
         "mp_6": "mp_display",
         "mp_7": "mp_display",
         "mp_8": "mp_display",
-        "hp_6": "hp_check_display",
     }
 
     # Map ROI key -> image config key (where names differ)

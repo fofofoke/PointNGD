@@ -625,15 +625,23 @@ class AutomationEngine:
         """Classify HP using template matching after MP=9 confirmed.
 
         Checks if the first digit of HP is 6 (60s) using hp_6 template.
+        hp_6 uses its own ROI (tens digit only); falls back to hp_region
+        if hp_6 ROI is not configured.
         Returns:
             "delete" if HP is 60s (hp_6 matched)
             "success" if HP is 70s (hp_6 not matched)
         """
         hp6_path = self.config["images"].get("hp_6", "")
         if hp6_path and os.path.exists(hp6_path):
+            # Use hp_6's own ROI if configured, otherwise fall back
+            hp6_roi_cfg = self.config["roi"].get("hp_6")
+            if hp6_roi_cfg and hp6_roi_cfg.get("w", 0) > 0:
+                hp6_region = self._abs_roi(hp6_roi_cfg)
+            else:
+                hp6_region = hp_region
             hp6_threshold = self._get_image_threshold("hp_6", strict_threshold)
             found_hp6, _, _, conf_hp6 = self.recognizer.find_template_in_region(
-                hp6_path, hp_region, threshold=hp6_threshold
+                hp6_path, hp6_region, threshold=hp6_threshold
             )
             if found_hp6:
                 self._log(

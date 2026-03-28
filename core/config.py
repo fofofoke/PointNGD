@@ -30,6 +30,7 @@ DEFAULT_CONFIG = {
         "delete_popup": {"x": 0, "y": 0, "w": 200, "h": 100},
         "hp_display": {"x": 0, "y": 0, "w": 80, "h": 30},
         "hp_check_display": {"x": 0, "y": 0, "w": 80, "h": 30},
+        "hp_6": {"x": 0, "y": 0, "w": 40, "h": 30},
         "exp_display": {"x": 0, "y": 0, "w": 100, "h": 20},
         "game_entered": {"x": 0, "y": 0, "w": 200, "h": 200},
     },
